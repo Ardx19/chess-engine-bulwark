@@ -1,0 +1,5 @@
+build*/
+*.o
+data/
+nets/*.nnue
+__pycache__/
