@@ -73,7 +73,8 @@ void gen_castling(const Position& pos, MoveList& list) {
         if (path & occ_wo) continue;
         // King may not pass through or land on attacked squares. Slider attacks are computed with the king and
         // the castling rook removed from occupancy (a rook shielding the king would otherwise hide an attacker).
-        Bitboard ksp = span(ksq, kto) & ~sq_bb(ksq);   // start square: covered by the not-in-check precondition
+        Bitboard ksp = (span(ksq, kto) & ~sq_bb(ksq)) | sq_bb(kto);   // start square is covered by the not-in-check
+        // precondition, but the destination must always be tested (it may equal the start square)
         bool ok = true;
         while (ksp && ok) {
             int s = pop_lsb(ksp);
