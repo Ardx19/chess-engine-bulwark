@@ -330,3 +330,52 @@ std::string Position::move_to_uci(Move m, bool chess960) const {
     if (m.is_promo()) s += "nbrq"[m.promo_type() - KNIGHT];
     return s;
 }
+
+bool Position::see_ge(Move m, int threshold) const {
+    static const int V[7] = {100, 320, 330, 500, 900, 0, 0};
+    if (m.is_castle()) return 0 >= threshold;
+    int from = m.from(), to = m.to();
+    int captured = m.is_ep() ? PAWN : (board[to] == NO_PIECE ? NO_PT : type_of(board[to]));
+    int swap = V[captured] - threshold;
+    if (swap < 0) return false;
+    swap = V[type_of(board[from])] - swap;
+    if (swap <= 0) return true;
+
+    Bitboard occ = pieces() ^ sq_bb(from) ^ sq_bb(to);
+    if (m.is_ep()) occ ^= sq_bb(to + (stm == WHITE ? -8 : 8));
+    Color side = stm;
+    Bitboard attackers = attackers_to(to, occ);
+    int res = 1;
+    while (true) {
+        side = ~side;
+        attackers &= occ;
+        Bitboard mine = attackers & pieces(side);
+        if (!mine) break;
+        res ^= 1;
+        Bitboard bb;
+        if ((bb = mine & by_type[PAWN])) {
+            if ((swap = V[PAWN] - swap) < res) break;
+            occ ^= bb & -bb;
+            attackers |= bishop_attacks(to, occ) & (by_type[BISHOP] | by_type[QUEEN]);
+        } else if ((bb = mine & by_type[KNIGHT])) {
+            if ((swap = V[KNIGHT] - swap) < res) break;
+            occ ^= bb & -bb;
+        } else if ((bb = mine & by_type[BISHOP])) {
+            if ((swap = V[BISHOP] - swap) < res) break;
+            occ ^= bb & -bb;
+            attackers |= bishop_attacks(to, occ) & (by_type[BISHOP] | by_type[QUEEN]);
+        } else if ((bb = mine & by_type[ROOK])) {
+            if ((swap = V[ROOK] - swap) < res) break;
+            occ ^= bb & -bb;
+            attackers |= rook_attacks(to, occ) & (by_type[ROOK] | by_type[QUEEN]);
+        } else if ((bb = mine & by_type[QUEEN])) {
+            if ((swap = V[QUEEN] - swap) < res) break;
+            occ ^= bb & -bb;
+            attackers |= (bishop_attacks(to, occ) & (by_type[BISHOP] | by_type[QUEEN])) |
+                         (rook_attacks(to, occ) & (by_type[ROOK] | by_type[QUEEN]));
+        } else {
+            return (attackers & ~pieces(side)) ? bool(res ^ 1) : bool(res);   // king
+        }
+    }
+    return bool(res);
+}

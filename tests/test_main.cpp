@@ -1,6 +1,11 @@
 // Minimal test runner (no external deps). Usage: run_tests <data_dir> [--full]
 #include "movegen.h"
 #include "perft.h"
+#include "bench.h"
+#include "eval.h"
+#include "search.h"
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -66,6 +71,92 @@ static void zobrist_walk(const Position& p, int d) {
     for (Move m : ml) zobrist_walk(p.make(m), d - 1);
 }
 
+// Color flip: mirror ranks, swap piece colors, side to move, castling letters and ep rank.
+static std::string color_flip(const std::string& fen) {
+    std::istringstream is(fen);
+    std::string pl, stm, cs, ep, rest;
+    is >> pl >> stm >> cs >> ep;
+    std::getline(is, rest);
+    std::vector<std::string> rows;
+    std::string cur;
+    for (char c : pl) { if (c == '/') { rows.push_back(cur); cur.clear(); } else cur += c; }
+    rows.push_back(cur);
+    std::reverse(rows.begin(), rows.end());
+    std::string out;
+    for (size_t i = 0; i < rows.size(); ++i) {
+        for (char c : rows[i]) out += std::isalpha((unsigned char)c) ? (std::isupper((unsigned char)c) ? (char)std::tolower(c) : (char)std::toupper(c)) : c;
+        if (i + 1 < rows.size()) out += '/';
+    }
+    std::string c2;
+    for (char c : cs) c2 += std::isalpha((unsigned char)c) ? (std::isupper((unsigned char)c) ? (char)std::tolower(c) : (char)std::toupper(c)) : c;
+    if (ep != "-") ep[1] = char('1' + '8' - ep[1]);
+    return out + (stm == "w" ? " b " : " w ") + c2 + " " + ep + rest;
+}
+
+static void test_eval_symmetry() {
+    for (const char* f : bench_fens()) {
+        Position a, b;
+        a.set_fen(f); b.set_fen(color_flip(f));
+        CHECK(Eval::evaluate(a) == Eval::evaluate(b), "eval asymmetry %s: %d vs %d", f, Eval::evaluate(a), Eval::evaluate(b));
+        // flipped perft must agree too
+        CHECK(perft(a, 3) == perft(b, 3), "flip perft %s", f);
+    }
+}
+
+static void test_see() {
+    struct T { const char* fen; const char* mv; int thr; bool exp; };
+    T tests[] = {
+        {"1k1r4/1pp4p/p7/4p3/8/P5P1/1PP4P/2K1R3 w - - 0 1", "e1e5", 0, true},      // wins a pawn
+        {"1k1r3q/1ppn3p/p4b2/4p3/8/P2N2P1/1PP1R1BP/2K1Q3 w - - 0 1", "d3e5", 0, false},  // loses a knight for a pawn
+        {"1k1r3q/1ppn3p/p4b2/4p3/8/P2N2P1/1PP1R1BP/2K1Q3 w - - 0 1", "d3e5", -250, true},
+    };
+    for (auto& t : tests) {
+        Position p; p.set_fen(t.fen);
+        Move m = p.parse_move(t.mv);
+        CHECK(m, "see move %s", t.mv);
+        if (m) CHECK(p.see_ge(m, t.thr) == t.exp, "see %s %s thr %d", t.fen, t.mv, t.thr);
+    }
+}
+
+static std::string uci_best(Searcher& s, const char* fen, int depth, int* score_out = nullptr) {
+    Position p; p.set_fen(fen);
+    Limits l; l.depth = depth;
+    s.new_game();
+    s.stop = false;
+    Move m = s.think(p, {}, l, false);
+    (void)score_out;
+    return p.move_to_uci(m, false);
+}
+
+static void test_search() {
+    Searcher s;
+    CHECK(uci_best(s, "6k1/5ppp/8/8/8/8/5PPP/R5K1 w - - 0 1", 4) == "a1a8", "mate in 1");
+    CHECK(uci_best(s, "k7/8/1K6/8/8/8/8/7R w - - 0 1", 4) == "h1h8", "mate in 1 (rook)");
+    // stalemate trap: Qg6?? stalemates; engine with extra queen must not stalemate
+    {
+        Position p; p.set_fen("7k/5Q2/6K1/8/8/8/8/8 w - - 0 1");
+        Limits l; l.depth = 6; s.new_game(); s.stop = false;
+        Move m = s.think(p, {}, l, false);
+        Position c = p.make(m);
+        MoveList ml; generate_legal(c, ml);
+        CHECK(ml.size() > 0 || c.in_check(), "engine stalemated the opponent: %s", p.move_to_uci(m, false).c_str());
+    }
+    // Draw by repetition inside history: K+R vs K+R shuffling must not crash and returns a legal move
+    {
+        Position p; p.set_fen("8/8/8/8/8/4k3/8/R3K3 w - - 0 1");
+        Limits l; l.depth = 5; s.new_game(); s.stop = false;
+        Move m = s.think(p, {}, l, false);
+        CHECK(m && p.is_legal(m), "legal move in KR vs K");
+    }
+    // Nodes limit respected approximately
+    {
+        Position p; p.set_fen(Position::START_FEN);
+        Limits l; l.nodes = 20000; s.new_game(); s.stop = false;
+        s.think(p, {}, l, false);
+        CHECK(s.nodes() < 40000, "node limit: %llu", (unsigned long long)s.nodes());
+    }
+}
+
 int main(int argc, char** argv) {
     std::string dir = argc > 1 ? argv[1] : "tests/data";
     bool full = argc > 2 && std::string(argv[2]) == "--full";
@@ -77,6 +168,9 @@ int main(int argc, char** argv) {
         Position p; p.set_fen(f); zobrist_walk(p, 3);
     }
     U64 cap = full ? ~0ULL : 20000000ULL;
+    test_eval_symmetry();
+    test_see();
+    test_search();
     run_perft_file(dir + "/perft_standard.epd", cap);
     run_perft_file(dir + "/perft_960.epd", cap);
     std::printf("%d checks, %d failures\n", checks, failures);

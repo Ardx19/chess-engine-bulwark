@@ -3,3 +3,5 @@ build*/
 data/
 nets/*.nnue
 __pycache__/
+results/
+engines/

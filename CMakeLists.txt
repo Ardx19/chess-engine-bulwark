@@ -19,11 +19,20 @@ add_library(core STATIC
   src/bitboard.cpp
   src/position.cpp
   src/movegen.cpp
-  src/perft.cpp)
+  src/perft.cpp
+  src/tt.cpp
+  src/eval.cpp
+  src/search.cpp
+  src/bench.cpp)
+find_package(Threads REQUIRED)
+target_link_libraries(core PUBLIC Threads::Threads)
 target_include_directories(core PUBLIC src)
 if(USE_PEXT)
   target_compile_definitions(core PUBLIC USE_PEXT)
 endif()
+
+add_executable(bulwark src/main.cpp)
+target_link_libraries(bulwark core)
 
 add_executable(perft tools/perft_main.cpp)
 target_link_libraries(perft core)

@@ -41,6 +41,7 @@ struct Position {
 
     Bitboard attackers_to(int s, Bitboard occ) const;       // pieces of both colors
     bool attacked_by(Color c, int s, Bitboard occ) const;   // is s attacked by color c given occupancy occ
+    bool see_ge(Move m, int threshold) const;                // static exchange evaluation threshold test
     bool is_legal(Move m) const;                            // for moves from the pseudo-legal generator
     Position make(Move m) const;
     Position make_null() const;
