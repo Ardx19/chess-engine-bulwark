@@ -46,3 +46,6 @@ target_link_libraries(run_tests core)
 
 enable_testing()
 add_test(NAME unit COMMAND run_tests ${CMAKE_SOURCE_DIR}/tests/data)
+
+add_executable(lc0_convert tools/lc0_convert.cpp)
+target_link_libraries(lc0_convert core)
