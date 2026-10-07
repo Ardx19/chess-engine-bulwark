@@ -4,6 +4,7 @@
 #include "bench.h"
 #include "eval.h"
 #include "search.h"
+#include "tablebase.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -157,6 +158,27 @@ static void test_search() {
     }
 }
 
+// Needs SYZYGY_PATH (3-5 piece tables); skipped otherwise.
+static void test_tablebase() {
+    const char* path = std::getenv("SYZYGY_PATH");
+    if (!path) { std::puts("tablebase test skipped (SYZYGY_PATH unset)"); return; }
+    CHECK(TB::init(path) && TB::largest() >= 5, "tb init");
+    Position p;
+    p.set_fen("8/8/8/8/8/5k2/6p1/6K1 w - - 0 1");   // black pawn promotes: white loses
+    CHECK(TB::probe_wdl(p) == TB::LOSS, "KvKP loss");
+    p.set_fen("8/8/8/4k3/8/8/2K5/5Q2 w - - 0 1");   // KQK: won, root filter keeps only winning moves
+    CHECK(TB::probe_wdl(p) == TB::WIN, "KQK win");
+    MoveList allowed; CHECK(TB::root_filter(p, allowed) && allowed.size() > 0, "root filter KQK");
+    p.set_fen("8/8/8/8/8/8/8/K1k5 w - - 0 1");      // bare kings: draw
+    CHECK(TB::probe_wdl(p) == TB::DRAW || TB::probe_wdl(p) == TB::FAIL, "KK");
+    // A stalemating Qg6?? type move must not be kept when the position is a win: 7k/5Q2/6K1 w
+    p.set_fen("7k/5Q2/6K1/8/8/8/8/8 w - - 0 1");
+    MoveList a2;
+    if (TB::root_filter(p, a2))
+        for (Move m : a2) { Position c = p.make(m); MoveList l; generate_legal(c, l); CHECK(l.size() > 0 || c.in_check(), "TB kept stalemating move"); }
+    TB::init("");
+}
+
 int main(int argc, char** argv) {
     std::string dir = argc > 1 ? argv[1] : "tests/data";
     bool full = argc > 2 && std::string(argv[2]) == "--full";
@@ -171,6 +193,7 @@ int main(int argc, char** argv) {
     test_eval_symmetry();
     test_see();
     test_search();
+    test_tablebase();
     run_perft_file(dir + "/perft_standard.epd", cap);
     run_perft_file(dir + "/perft_960.epd", cap);
     std::printf("%d checks, %d failures\n", checks, failures);

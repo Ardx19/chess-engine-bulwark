@@ -42,7 +42,8 @@ uint64_t pyr_king_attacks(unsigned sq);
 
 #define PYRRHIC_POPCOUNT(x)              (__builtin_popcountll(x))
 #define PYRRHIC_LSB(x)                   (__builtin_ctzll(x))
-#define PYRRHIC_POPLSB(x)                ((*(x)) &= (*(x)) - 1)
+static inline unsigned pyr_poplsb(uint64_t *b) { unsigned s = (unsigned)__builtin_ctzll(*b); *b &= *b - 1; return s; }
+#define PYRRHIC_POPLSB(x)                (pyr_poplsb(x))   /* returns the popped square */
 
 #define PYRRHIC_PAWN_ATTACKS(sq, c)      (pyr_pawn_attacks(sq, c))
 #define PYRRHIC_KNIGHT_ATTACKS(sq)       (pyr_knight_attacks(sq))
