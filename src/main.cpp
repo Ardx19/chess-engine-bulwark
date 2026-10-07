@@ -2,6 +2,7 @@
 #include "bench.h"
 #include "eval.h"
 #include "perft.h"
+#include "tablebase.h"
 #include <cstdio>
 #include <iostream>
 #include <sstream>
@@ -76,6 +77,8 @@ struct Engine {
         if (name == "Hash") searcher.tt.resize(std::max(1, std::stoi(value)));
         else if (name == "Move Overhead") searcher.opt.move_overhead = std::stoi(value);
         else if (name == "UCI_Chess960") searcher.opt.chess960 = value == "true";
+        else if (name == "SyzygyPath") { searcher.opt.syzygy_path = value; TB::init(value); }
+        else if (bool* f = searcher.opt.flag(name)) *f = value == "true";
         // Threads, SyzygyPath, EvalFile, D* switches: accepted, wired up in later phases.
     }
 
@@ -91,6 +94,10 @@ struct Engine {
                 std::puts("option name Threads type spin default 1 min 1 max 1");
                 std::puts("option name Move Overhead type spin default 10 min 0 max 5000");
                 std::puts("option name UCI_Chess960 type check default false");
+                for (const char* n : {"Aspiration", "RFP", "NMP", "LMR", "KillersHistory", "LMPFutility", "IIR", "Improving",
+                                      "SEEPrune", "TMScaling", "D3_Rule50Scale", "D4_Syzygy", "D5_StalemateGuard"})
+                    std::printf("option name %s type check default true\n", n);
+                std::puts("option name SyzygyPath type string default <empty>");
                 std::puts("uciok");
             } else if (cmd == "isready") std::puts("readyok");
             else if (cmd == "ucinewgame") { join(); searcher.new_game(); }

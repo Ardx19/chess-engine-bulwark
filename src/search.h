@@ -10,6 +10,8 @@ constexpr int MAX_PLY = 128;
 constexpr int INF = 32001;
 constexpr int MATE = 32000;
 constexpr int MATE_IN_MAX = MATE - MAX_PLY;
+constexpr int TB_WIN = 20000;                      // tablebase win score, minus ply
+constexpr int DECISIVE = TB_WIN - MAX_PLY;       // |score| >= DECISIVE: forced mate or tablebase result
 constexpr int NO_EVAL = -INF - 1;
 
 struct Limits {
@@ -23,10 +25,26 @@ struct Limits {
     bool use_clock = false;        // wtime/btime given
 };
 
+// Every ladder step / defensive feature is a switch so one binary can be SPRT-tested against itself.
 struct Options {
     int hash_mb = 16;
     int move_overhead = 10;
     bool chess960 = false;
+    bool aspiration = true;        // ladder 1
+    bool rfp = true;               // 2  reverse futility
+    bool nmp = true;               // 3  null move
+    bool lmr = true;               // 4  late move reductions
+    bool killers_history = true;   // 5
+    bool lmp_futility = true;      // 6
+    bool iir = true;               // 7
+    bool improving = true;         // 8
+    bool see_prune = true;         // 9
+    bool tm_scaling = true;        // time management: node fraction + best-move stability
+    bool d3_rule50 = true;         // D3: scale eval toward draw with the halfmove clock
+    bool d5_stalemate = true;      // D5: stalemate guard in qsearch at low material
+    bool d4_syzygy = true;         // D4: tablebase probes (needs SyzygyPath)
+    std::string syzygy_path;
+    bool* flag(const std::string& name);   // UCI option name -> switch, or nullptr
 };
 
 class Searcher {
@@ -59,6 +77,12 @@ private:
     Move killers_[MAX_PLY + 4][2];
     int16_t history_[COLOR_NB][64][64];
     int static_eval_[MAX_PLY + 4];
+    bool null_prev_[MAX_PLY + 4];
+    uint64_t root_move_nodes_[64][64];
+    MoveList root_allowed_;
+    bool root_filtered_ = false;
+    uint64_t tb_hits_ = 0;
+    int eval_of(const Position& pos) const;
 
     Limits lim_;
     bool print_ = true;
