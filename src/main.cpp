@@ -1,6 +1,7 @@
 // UCI front end.
 #include "bench.h"
 #include "eval.h"
+#include "nnue.h"
 #include "perft.h"
 #include "tablebase.h"
 #include <cstdio>
@@ -109,6 +110,13 @@ struct Engine {
             else if (cmd == "quit") { searcher.stop = true; join(); return; }
             else if (cmd == "bench") { int d = 6; is >> d; join(); run_bench(searcher, d, true); }
             else if (cmd == "perft") { int d = 1; is >> d; perft_divide(pos, d, searcher.opt.chess960); }
+            else if (cmd == "verifynet") {   // verifynet <net.nnue|net.nnuef> <ref.jsonl> [limit]
+                std::string net_path, ref_path; size_t lim = 0;
+                is >> net_path >> ref_path >> lim;
+                NNUE::Net net; std::string err;
+                if (!net.load(net_path, &err)) std::printf("verifynet: %s\n", err.c_str());
+                else NNUE::verify(net, ref_path, lim);
+            }
             else if (cmd == "eval") std::printf("eval %d (side to move)\n", Eval::evaluate(pos));
             else if (cmd == "d") std::printf("%s\nkey %016llx\n", pos.fen(searcher.opt.chess960).c_str(), (unsigned long long)pos.key);
             std::fflush(stdout);

@@ -26,6 +26,7 @@ add_library(core STATIC
   src/search.cpp
   src/bench.cpp
   src/tablebase.cpp
+  src/nnue.cpp
   third_party/pyrrhic/tbprobe.c)
 find_package(Threads REQUIRED)
 target_link_libraries(core PUBLIC Threads::Threads)

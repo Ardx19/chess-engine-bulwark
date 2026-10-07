@@ -212,6 +212,27 @@ class Training(unittest.TestCase):
         self.assertEqual(len(lines), 50)
         self.assertEqual(len(lines[0]["out"]), 3)
 
+    def test_engine_parity_with_pytorch(self):
+        """Float C++ inference must match PyTorch; the quantised path must stay close to float."""
+        exe = os.path.join(ROOT, "build", "bulwark")
+        if not os.path.exists(exe):
+            self.skipTest("bulwark not built")
+        import subprocess
+        from nnue.train import train
+        from nnue.export import export_net, load_checkpoint_model, write_reference
+        out = train(self.cfg("parity", steps=30, lr=3e-3, n=32), resume="none")
+        m = load_checkpoint_model(out["final"])
+        info = export_net(m, os.path.join(self.tmp, "nets_p"))
+        ref = os.path.join(self.tmp, "ref_p.jsonl")
+        write_reference(m, glob.glob(os.path.join(self.tmp, "val", "*.bin"))[0], ref, 300)
+        errs = {}
+        for kind in ("float", "quantized"):
+            res = subprocess.run([exe], input=f"verifynet {info[kind]} {ref}\nquit\n", capture_output=True, text=True).stdout
+            line = [l for l in res.splitlines() if l.startswith("verifynet")][0]
+            errs[kind] = float(line.split("max abs error ")[1].split(",")[0])
+        self.assertLess(errs["float"], 1e-4)
+        self.assertLess(errs["quantized"], 0.15)
+
     def test_model_color_flip_invariance(self):
         import torch
         from nnue.model import NNUE
