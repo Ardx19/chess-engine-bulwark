@@ -94,9 +94,10 @@ struct Engine {
                 std::puts("option name Threads type spin default 1 min 1 max 1");
                 std::puts("option name Move Overhead type spin default 10 min 0 max 5000");
                 std::puts("option name UCI_Chess960 type check default false");
-                for (const char* n : {"Aspiration", "RFP", "NMP", "LMR", "KillersHistory", "LMPFutility", "IIR", "Improving",
+                for (const char* n : {"Aspiration", "RFP", "NMP", "LMR", "KillersHistory", "LMPFutility", "Improving",
                                       "SEEPrune", "TMScaling", "D3_Rule50Scale", "D4_Syzygy", "D5_StalemateGuard"})
                     std::printf("option name %s type check default true\n", n);
+                std::puts("option name IIR type check default false");
                 std::puts("option name SyzygyPath type string default <empty>");
                 std::puts("uciok");
             } else if (cmd == "isready") std::puts("readyok");

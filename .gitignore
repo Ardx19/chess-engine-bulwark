@@ -5,3 +5,4 @@ nets/*.nnue
 __pycache__/
 results/
 engines/
+config.json
