@@ -100,6 +100,11 @@ def train(cfg: dict, resume: str = "auto") -> dict:
     run_dir = os.path.join(cfg["ckpt_dir"], f"run-{cfg['run_id']}")
     os.makedirs(run_dir, exist_ok=True)
     device = cfg.get("device") or ("cuda" if torch.cuda.is_available() else "cpu")
+    # Shared machines (run control, not part of the config hash): cap this process's share of GPU memory and CPU threads.
+    if device == "cuda" and os.environ.get("GPU_MEM_FRACTION"):
+        torch.cuda.set_per_process_memory_fraction(float(os.environ["GPU_MEM_FRACTION"]))
+    if os.environ.get("TORCH_THREADS"):
+        torch.set_num_threads(int(os.environ["TORCH_THREADS"]))
     chash = config_hash(cfg)
     train_paths = sorted(glob.glob(cfg["train_glob"]))
     val_paths = sorted(glob.glob(cfg["val_glob"])) if cfg.get("val_glob") else train_paths
