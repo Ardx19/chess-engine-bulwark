@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # All GPU training runs, one after another on ONE GPU, at low priority so other jobs on a shared server win.
 #
-#   DATA=~/data/nnue/training scripts/gpu_queue.sh            # run (or resume) the whole queue
-#   RUNS="n1 n1wdl" scripts/gpu_queue.sh                      # only some runs
-#   SMOKE=1 DATA=... scripts/gpu_queue.sh                     # 20 steps per run, to test the setup end to end
+#   scripts/gpu_queue.sh                     # run (or resume) the whole queue; data from data/training
+#   RUNS="n1 n1wdl" scripts/gpu_queue.sh     # only some runs
+#   SMOKE=1 CKPT=ckpt_smoke NETS=nets_smoke scripts/gpu_queue.sh   # 20 steps per run, to test the setup
+# All paths are relative to the project folder: checkpoints in ckpt/, nets in nets/<run>/, logs in results/gpu_queue/.
 #
 # Order: sanity (only if PILOT is set), n1, n1wdl, n2, n3count, n3learned (both N3 start from n2's final.pt).
 # Each run resumes from its newest checkpoint if interrupted and is skipped once its DONE marker exists, so the queue
@@ -20,7 +21,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DATA=${DATA:?set DATA to the training root holding train/ val/ test/}
+DATA=${DATA:-data/training}                     # train/ val/ test/ from pipeline.make_training
+[ -z "${PILOT:-}" ] && [ -d data/pilot_training ] && PILOT=data/pilot_training
 CKPT=${CKPT:-ckpt}
 NETS=${NETS:-nets}
 LOGS=${LOGS:-results/gpu_queue}

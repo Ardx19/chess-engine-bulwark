@@ -10,3 +10,10 @@ config.json
 ckpt/
 data/
 !tests/data/
+ckpt*/
+nets/*/
+nets_smoke/
+.venv/
+tools/sf/
+tools/syzygy/
+/bulwark.bundle

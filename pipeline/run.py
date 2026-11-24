@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -23,18 +24,35 @@ from .records import SF_WD_ABSENT, read_shard, write_shard
 from .relabel import relabel
 
 BASE = "https://storage.lczero.org/files/training_data/"
+# storage.lczero.org sits behind Cloudflare, which rejects urllib's default "Python-urllib/x.y" user agent
+# (HTTP 403, error 1010). Send a plain client name instead.
+HEADERS = {"User-Agent": "nnue-data-pipeline/1.0"}
+
+
+def _open(url: str, timeout: int):
+    return urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=timeout)
 
 
 def list_tars(run: str) -> list[str]:
-    html = urllib.request.urlopen(f"{BASE}{run}/", timeout=60).read().decode()
+    html = _open(f"{BASE}{run}/", 60).read().decode()
     return sorted(set(re.findall(r'href="(training-[^"]+\.tar)"', html)))
+
+
+def pick_tars(names: list[str], session: int, num_sessions: int, max_tars: int, skip_newest: int = 0) -> list[str]:
+    """This session's tars: a disjoint slice (every num_sessions-th tar), in a fixed per-session random order so a
+    chunk samples the whole run (tar sizes range from ~50 MB to ~1 GB across test91) rather than only its oldest part."""
+    names = sorted(names)
+    names = names[:-skip_newest] if skip_newest else names
+    mine = names[session::num_sessions]
+    random.Random(1000 + session).shuffle(mine)
+    return mine[:max_tars]
 
 
 def download(url: str, dest: str, retries: int = 4, throttle_s: float = 0.0) -> float:
     t0 = time.time()
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(url, timeout=120) as r, open(dest, "wb") as f:
+            with _open(url, 120) as r, open(dest, "wb") as f:
                 while True:
                     blk = r.read(1 << 20)
                     if not blk:
@@ -65,6 +83,7 @@ def main():
     ap.add_argument("--syzygy")
     ap.add_argument("--stride", type=int, default=1)
     ap.add_argument("--stop-taking-h", type=float, default=10.5)
+    ap.add_argument("--max-kept", type=int, default=0, help="stop taking tars once this many positions were kept (0 = no limit)")
     ap.add_argument("--relabel-limit", type=int, default=0, help="pilot: relabel only the first N positions per shard")
     ap.add_argument("--throttle-s", type=float, default=1.0)
     a = ap.parse_args()
@@ -78,15 +97,15 @@ def main():
     if a.local_tars:
         sources = [(os.path.basename(t), t) for t in a.local_tars]
     else:
-        names = list_tars(a.run)
-        names = names[:-a.skip_tars] if a.skip_tars else names
-        mine = names[a.session::a.num_sessions][:a.max_tars]
-        sources = [(n, None) for n in mine]
+        sources = [(n, None) for n in pick_tars(list_tars(a.run), a.session, a.num_sessions, a.max_tars, a.skip_tars)]
 
     master_shards, files, totals = [], [], {}
     for i, (name, local) in enumerate(sources):
         if (time.time() - t_start) / 3600 > a.stop_taking_h:
             print("deadline: not taking more tars")
+            break
+        if a.max_kept and totals.get("kept", 0) >= a.max_kept:
+            print(f"kept {totals['kept']} >= --max-kept: not taking more tars")
             break
         path = local
         if path is None:
