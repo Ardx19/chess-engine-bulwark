@@ -46,8 +46,8 @@ def restore(d, session, roots):
     """Copy the most advanced earlier copy of this session's folder (by round, then labeled positions) into d."""
     best = None
     for root in roots:
-        for sf in glob.glob(os.path.join(root, "*", "bulwark_data", f"s{session}", "state.json")) + \
-                  glob.glob(os.path.join(root, "bulwark_data", f"s{session}", "state.json")):
+        # any depth: Kaggle mounts inputs at e.g. /kaggle/input/<name>/ or /kaggle/input/notebooks/<user>/<name>/
+        for sf in glob.glob(os.path.join(root, "**", "bulwark_data", f"s{session}", "state.json"), recursive=True):
             st = json.load(open(sf))
             key = (st.get("rounds", 0), st.get("labeled", 0))
             if os.path.dirname(os.path.abspath(sf)) != os.path.abspath(d) and (best is None or key > best[0]):
