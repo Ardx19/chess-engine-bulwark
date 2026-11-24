@@ -33,15 +33,28 @@ Total 56. Shard header: magic "NNUEMR01", version u32, record count u64, shard i
 Master record without provenance (ply, game id, own_cp, reserved): board 27 B + teacher fields + result/flags, padded to 40.
 
 ## UCI option / switch names (all defense features are switches)
-`UCI_Chess960`, `Hash`, `Threads`, `Move Overhead`, `EvalFile`, `SyzygyPath`,
-`DrawValue` (spin, per-mille, default 500), `DefenseMode` (check), `D1_WDLUtility`, `D3_Rule50Scale`,
-`D4_Syzygy`, `D5_StalemateGuard`, `D6_PerpetualSeek`, `D7_FortressDetect`.
-Extra commands: `bench [depth]`, `verifynet <file.jsonl>`, `perft <depth>`.
+`UCI_Chess960`, `Hash`, `Threads`, `Move Overhead`, `EvalFile`, `SyzygyPath`, `UCI_ShowWDL`,
+`DrawValue` (spin, per-mille, default 500), `DefenseMode` (check; D2), `DefenseDrawValue` (spin, 650),
+`DefenseLossThreshold` (spin, per-mille P(loss), 400), `D1_WDLUtility`, `D3_Rule50Scale`,
+`D4_Syzygy`, `D5_StalemateGuard`, `D6_PerpetualSeek`, `D7_FortressDetect`, plus the ladder switches
+(`Aspiration`, `RFP`, `NMP`, `LMR`, `KillersHistory`, `LMPFutility`, `IIR`, `Improving`, `SEEPrune`, `TMScaling`).
+Draw weight: `d = 0.5` unless `D1_WDLUtility` (then `DrawValue`) or D2 triggers (then `DefenseDrawValue`);
+opponent-to-move nodes use `1 - d`; in-tree draws score `400*logit(d)` for the root side. The TT is cleared when
+`d`, the root side (if `d != 0.5`) or the net changes.
+Extra commands: `bench [depth] [net] [verbose]`, `verifynet <net> <ref.jsonl> [limit]`, `perft <depth>`, `eval`, `d`,
+`go ... searchmoves <moves>`.
 
 ## Net file format
-`.nnue`: magic "NNUEWDL1", u32 version, u32 arch id (N1=1, N1-WDL=2, N2=3, N3=4), u32 L1 width, u32 bucket count,
-u32 head count, then little-endian int16 feature weights/biases, int8 hidden weights, int32 biases, sha256 trailer.
-Scale: QA = 255, QB = 64.
+`.nnue` (quantised, magic "NNUEWDL1") and `.nnuef` (float32, magic "NNUEFLT1"), little endian, sha256 trailer.
+Scale: QA = 255, QB = 64. Full layouts in the docstring of `nnue/export.py`.
+- Version 1 (N1 = arch 1, N1-WDL = arch 2): u32 version, arch, L1, buckets = 1, heads | i16 ft_w[768][L1] | i16 ft_b |
+  i16 out_w[heads][2*L1] | i32 out_b[heads].
+- Version 2 (N2 = arch 3, N3 = arch 4): u32 version, arch, L1, buckets = 8, heads, L2, L3, K, router (0 none, 1 piece
+  count, 2 learned) | i16 ft_w[8*768][L1] | i16 ft_b | i8 l2_w[K*L2][2*L1] | f32 l2_b, l3_w, l3_b, out_w, out_b |
+  (router 2: i8 r_w[K][2*L1], f32 r_s[K][4], f32 r_b[K]).
+- N2/N3 features: own king seen from the perspective; files e-h mirror every square (^7); bucket by
+  `[0 1 2 3 / 4 4 5 5 / 6 6 6 6 / 6 6 6 6 / 7 x16]` (rank-major over the mirrored a-d files);
+  feature = bucket*768 + (rel*6 + type)*64 + sq.
 
 ## Manifest schema (`manifest.json`)
 `{ "schema":1, "lc0_run":..., "files":[...], "filter":{...,"kept":n,"seen":n}, "stockfish":{"version","sha256","nodes","hash","threads","tb"},
