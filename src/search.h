@@ -36,7 +36,7 @@ struct Options {
     bool lmr = true;               // 4  late move reductions
     bool killers_history = true;   // 5
     bool lmp_futility = true;      // 6
-    bool iir = false;              // 7  default off: -15 +/- 22 Elo in the ladder SPRT (600 games); re-test pending
+    bool iir = true;               // 7  ladder -15 +/- 22 (600 g); re-test +21.7 +/- 14.1 (1200 g) -> on
     bool improving = true;         // 8
     bool see_prune = true;         // 9
     bool tm_scaling = true;        // time management: node fraction + best-move stability
