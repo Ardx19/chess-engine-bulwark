@@ -10,7 +10,8 @@ import torch.nn.functional as F
 
 from .data import PAD
 
-WEIGHT_CLAMP = 1.98   # first-layer weights stay inside int16 range after the QA = 255 scaling
+WEIGHT_CLAMP = 1.98   # first-layer weights stay inside int16 range after the QA = 255 scaling; output weights stay
+                      # small enough (|w * QB| * QA < 2^15) for the engine's exact int16 SIMD v*w kernel
 
 
 class NNUE(nn.Module):
@@ -39,6 +40,7 @@ class NNUE(nn.Module):
     def clamp_(self):
         self.ft.weight.clamp_(-WEIGHT_CLAMP, WEIGHT_CLAMP)
         self.ft.weight[PAD].zero_()
+        self.out.weight.clamp_(-WEIGHT_CLAMP, WEIGHT_CLAMP)
 
 
 def loss_fn(model: NNUE, out, target, escore, alpha: float = 0.0):

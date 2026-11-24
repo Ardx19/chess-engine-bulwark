@@ -24,6 +24,7 @@ struct Limits {
     int movestogo = 0;
     bool infinite = false;
     bool use_clock = false;        // wtime/btime given
+    std::vector<Move> searchmoves; // restrict the root moves (empty = all)
 };
 
 // Every ladder step / defensive feature is a switch so one binary can be SPRT-tested against itself.

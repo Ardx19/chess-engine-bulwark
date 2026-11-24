@@ -74,6 +74,18 @@ struct Engine {
             else if (tok == "depth") is >> lim.depth;
             else if (tok == "nodes") is >> lim.nodes;
             else if (tok == "infinite") lim.infinite = true;
+            else if (tok == "searchmoves") {
+                MoveList legal; generate_legal(pos, legal);
+                std::streampos at = is.tellg();
+                while (is >> tok) {
+                    Move m = pos.parse_move(tok);
+                    bool ok = false;
+                    for (Move x : legal) ok |= x == m;
+                    if (!m || !ok) { is.clear(); is.seekg(at); break; }   // next keyword
+                    lim.searchmoves.push_back(m);
+                    at = is.tellg();
+                }
+            }
             else if (tok == "perft") { int d; is >> d; perft_divide(pos, d, searcher.opt.chess960); return; }
         }
         join();

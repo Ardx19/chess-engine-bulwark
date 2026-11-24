@@ -447,6 +447,17 @@ Move Searcher::think(const Position& root, const std::vector<U64>& history, cons
     tb_hits_ = 0;
     root_allowed_.count = 0;
     root_filtered_ = opt.d4_syzygy && TB::root_filter(root, root_allowed_);
+    if (!lim.searchmoves.empty()) {   // UCI searchmoves, intersected with the tablebase filter when both apply
+        MoveList keep;
+        for (Move m : lim.searchmoves) {
+            bool in_tb = !root_filtered_;
+            for (Move a : root_allowed_) in_tb |= a == m;
+            if (in_tb) keep.add(m);
+        }
+        if (!keep.size()) for (Move m : lim.searchmoves) keep.add(m);
+        root_allowed_ = keep;
+        root_filtered_ = true;
+    }
 
     // D1/D2: draw weight for the root side. Scores and static evals depend on it (and on the root side when it is
     // not neutral), so the TT is cleared whenever that configuration or the net changes.
@@ -539,9 +550,10 @@ Move Searcher::think(const Position& root, const std::vector<U64>& history, cons
         for (int k = 0; k < 3; ++k) last_wdl_[k] = wdl[k] / 1000.0;
         last_color_ = root.stm;
     }
-    if (!best) {   // no completed iteration or no legal moves: fall back to any legal move
+    if (!best) {   // no completed iteration or no legal moves: fall back to any allowed legal move
         MoveList l; generate_legal(root, l);
-        if (l.size()) best = l.moves[0];
+        if (root_filtered_ && root_allowed_.size()) best = root_allowed_.moves[0];
+        else if (l.size()) best = l.moves[0];
     }
     return best;
 }
