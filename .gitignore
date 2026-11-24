@@ -9,3 +9,4 @@ engines/
 config.json
 ckpt/
 data/
+!tests/data/
