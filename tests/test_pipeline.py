@@ -247,3 +247,81 @@ class Training(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DataChecks(unittest.TestCase):
+    """Leakage check, bullet text export, tablebase-override check (pipeline/check_splits, to_bullet, tb_check)."""
+
+    def _master(self, fens_gids, **fields):
+        return np.concatenate([R.from_fen(f, gid=g, **fields) for f, g in fens_gids])
+
+    def test_split_overlap_detected_and_dropped(self):
+        from pipeline import check_splits as C
+        start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        other = "8/8/8/4k3/8/8/2K5/5Q2 w - - 0 1"
+        third = "8/8/8/8/8/5k2/6p1/6K1 w - - 0 1"
+        with tempfile.TemporaryDirectory() as d:
+            for name, fens in (("train", [start, other]), ("val", [start, third]), ("test", [third])):
+                os.makedirs(os.path.join(d, name))
+                R.write_shard(os.path.join(d, name, "s-00000.bin"), R.to_training(self._master([(f, 1) for f in fens])))
+            rep = C.check_training(d, max_overlap=0.1)
+            self.assertEqual(rep["val"]["overlap_with_train"], 1)
+            self.assertEqual(rep["test"]["overlap_with_train"], 0)
+            self.assertFalse(rep["ok"])
+            C.check_training(d, drop_overlap=True)
+            self.assertEqual(len(R.read_shard(os.path.join(d, "val", "s-00000.bin"))), 1)
+            self.assertTrue(C.check_training(d, max_overlap=0.0)["ok"])
+
+    def test_session_reuse_detected(self):
+        from pipeline import check_splits as C
+        f = "8/8/8/4k3/8/8/2K5/5Q2 w - - 0 1"
+        with tempfile.TemporaryDirectory() as d:
+            R.write_shard(os.path.join(d, "a.bin"), self._master([(f, (3 << 32) | 5), (f, (3 << 32) | 6)]))
+            R.write_shard(os.path.join(d, "b.bin"), self._master([(f, (3 << 32) | 7)]))
+            self.assertTrue(C.check_master(glob.glob(os.path.join(d, "*.bin")))["ok"])
+            R.write_shard(os.path.join(d, "c.bin"), self._master([(f, (3 << 32) | 6)]))   # same game id again
+            self.assertFalse(C.check_master(glob.glob(os.path.join(d, "*.bin")))["ok"])
+
+    def test_bullet_text_is_white_relative(self):
+        from pipeline import to_bullet as B
+        w = R.from_fen("8/8/8/4k3/8/8/2K5/5Q2 w - - 0 1", result=2, lc_q=9000, lc_d=500)
+        b = R.from_fen("8/8/8/4k3/8/8/2K5/5Q2 b - - 0 1", result=0, lc_q=-9000, lc_d=500)
+        u = R.from_fen("8/8/8/4k3/8/8/2K5/5Q2 b - - 0 1")                                  # unknown result: skipped
+        lines = list(B.lines(np.concatenate([w, b, u])))
+        self.assertEqual(len(lines), 2)
+        (fw, sw, rw), (fb, sb, rb) = [l.split(" | ") for l in lines]
+        self.assertTrue(fw.endswith("w - - 0 1") and fb.endswith("b - - 0 1"))
+        self.assertGreater(int(sw), 300)              # white winning, from white's view
+        self.assertGreater(int(sb), 300)              # black to move and losing: still positive for white
+        self.assertEqual((rw, rb), ("1.0", "1.0"))
+
+    def test_tb_check_mapping_with_fake_oracle(self):
+        from pipeline import tb_check as K
+        recs = np.concatenate([R.from_fen("8/8/8/4k3/8/8/2K5/5Q2 w - - 0 1", result=2, flags=1),
+                               R.from_fen("8/8/8/8/8/5k2/6p1/6K1 w - - 0 1", result=0, flags=1),
+                               R.from_fen("8/8/8/8/8/8/8/K1k5 w - - 0 1", result=1, flags=1)])
+
+        class Fake:
+            cats = ["win", "loss", "cursed-win"]
+            def __init__(self): self.i = -1
+            def category(self, fen):
+                self.i += 1
+                return self.cats[self.i]
+        rep = K.check(recs, Fake())
+        self.assertTrue(rep["ok"], rep)             # cursed win must have been stored as a draw
+        bad = recs.copy(); bad["result"][2] = 2     # a cursed win stored as a win is a labelling bug
+        self.assertFalse(K.check(bad, Fake())["ok"])
+
+    @unittest.skipUnless(os.path.isdir(os.path.expanduser("~/data/syzygy/tb345")), "no local Syzygy tables")
+    def test_tb_check_local_tables(self):
+        from pipeline import tb_check as K
+        recs = np.concatenate([R.from_fen("8/8/8/4k3/8/8/2K5/5Q2 w - - 0 1", result=2, flags=1),
+                               R.from_fen("8/8/8/8/8/5k2/6p1/6K1 w - - 0 1", result=0, flags=1)])
+        self.assertTrue(K.check(recs, K.LocalOracle("~/data/syzygy/tb345"))["ok"])
+
+    @unittest.skipUnless(os.environ.get("TB_API"), "set TB_API=1 to query tablebase.lichess.ovh")
+    def test_tb_check_lichess_api(self):
+        from pipeline import tb_check as K
+        recs = np.concatenate([R.from_fen("8/8/8/4k3/8/8/2K5/5Q2 w - - 0 1", result=2, flags=1),
+                               R.from_fen("8/8/8/8/8/5k2/6p1/6K1 w - - 0 1", result=0, flags=1)])
+        self.assertTrue(K.check(recs, K.LichessOracle(None))["ok"])

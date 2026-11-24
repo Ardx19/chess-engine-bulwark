@@ -18,3 +18,10 @@ Lc0 tar (storage.lczero.org, ODbL) --pipeline/convert.py--> tools/lc0_convert --
   Positions with a running halfmove clock are not overridden (WDL tables assume rule50 = 0).
 * Feature layout (shared with the engine): `(rel_color*6 + type)*64 + sq`, `sq ^= 56` for black's perspective, pad = 768.
 * Tests: `python3 -m unittest discover -s tests -p test_pipeline.py` (set `LC0_TAR` for the real-data check).
+* Data checks before scaling (WP-B):
+  - `python3 -m pipeline.tb_check 'master/*.bin' --oracle lichess` (or `--oracle local --syzygy DIR`): tablebase-overridden
+    labels against the Lichess tablebase API, per category (cursed wins / blessed losses must be stored as draws).
+  - `python3 -m pipeline.check_splits --master 'master/*.bin' --training data/training --max-overlap 0.05`: session-id
+    reuse, and exact-board overlap of val/test with train (`--drop-overlap` removes it from val/test).
+  - `python3 -m pipeline.to_bullet 'training/train/*.bin' bullet.txt`: bullet text (`FEN | score | result`, White's
+    view) for the N1 cross-check with bullet's `simple` example (eval scale 400, WDL weight 0).
