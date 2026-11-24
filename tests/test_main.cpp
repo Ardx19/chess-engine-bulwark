@@ -5,11 +5,14 @@
 #include "eval.h"
 #include "search.h"
 #include "tablebase.h"
+#include "nnue.h"
+#include <random>
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -179,6 +182,83 @@ static void test_tablebase() {
     TB::init("");
 }
 
+// Random quantised net built in memory. big_out = true makes |out_w| * QA overflow int16 (forces the scalar kernel).
+static NNUE::Net random_net(int l1, int heads, bool big_out, unsigned seed) {
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int> fw(-300, 300), fb(0, 200), ow(big_out ? -400 : -120, big_out ? 400 : 120);
+    NNUE::Net n;
+    n.l1 = l1; n.heads = heads; n.arch = heads == 3 ? 2 : 1; n.quantized = true;
+    n.q_ft_w.resize(size_t(NNUE::FEATURES) * l1); n.q_ft_b.resize(l1); n.q_out_w.resize(size_t(heads) * 2 * l1); n.q_out_b.resize(heads);
+    for (auto& w : n.q_ft_w) w = int16_t(fw(rng));
+    for (auto& b : n.q_ft_b) b = int16_t(fb(rng));
+    for (auto& w : n.q_out_w) w = int16_t(ow(rng));
+    for (auto& b : n.q_out_b) b = int32_t(fw(rng)) * 1000;
+    n.finalize();
+    return n;
+}
+
+// Incremental accumulators (diffed along every perft path) and the SIMD output must equal the scalar full refresh
+// exactly: everything is integer arithmetic.
+static int nnue_walk(const NNUE::Net& net, const Position& p, const NNUE::Accumulator& acc, int d) {
+    float a[3], b[3], c[3];
+    net.forward(p, a);
+    NNUE::output(net, acc, p.stm, b, true);
+    NNUE::output(net, acc, p.stm, c, false);
+    int bad = 0;
+    for (int h = 0; h < net.heads; ++h) bad += a[h] != b[h] || a[h] != c[h];
+    if (!d) return bad;
+    MoveList ml; generate_legal(p, ml);
+    auto child = std::make_unique<NNUE::Accumulator>();
+    for (Move m : ml) {
+        Position q = p.make(m);
+        NNUE::update(net, p, q, acc, *child);
+        bad += nnue_walk(net, q, *child, d - 1);
+    }
+    if (!p.in_check()) {   // null move: empty diff
+        Position q = p.make_null();
+        NNUE::update(net, p, q, acc, *child);
+        bad += nnue_walk(net, q, *child, 0);
+    }
+    return bad;
+}
+
+static void test_nnue() {
+    const char* fens[] = {"r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+                          "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
+                          "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+                          "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+                          "rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3"};
+    for (int variant = 0; variant < 3; ++variant) {
+        NNUE::Net net = random_net(variant == 2 ? 64 : 256, variant == 0 ? 1 : 3, variant == 1, 7 + variant);
+        CHECK(net.fast_out == (variant != 1), "fast_out flag variant %d", variant);
+        int bad = 0;
+        for (const char* f : fens) {
+            Position p; p.set_fen(f);
+            auto acc = std::make_unique<NNUE::Accumulator>();
+            NNUE::refresh(net, p, *acc);
+            bad += nnue_walk(net, p, *acc, 2);
+        }
+        CHECK(bad == 0, "nnue incremental/simd mismatches (variant %d): %d", variant, bad);
+    }
+    // Search with a net: deterministic node counts, legal moves; W/D/L utility with d != 0.5 still legal.
+    NNUE::Net net = random_net(128, 3, false, 99);
+    Searcher s;
+    s.set_net(&net);
+    Position p; p.set_fen(Position::START_FEN);
+    Limits l; l.depth = 7;
+    s.new_game(); s.stop = false;
+    Move m1 = s.think(p, {}, l, false); uint64_t n1 = s.nodes();
+    s.new_game(); s.stop = false;
+    Move m2 = s.think(p, {}, l, false); uint64_t n2 = s.nodes();
+    CHECK(m1 == m2 && n1 == n2, "nnue search not deterministic: %llu vs %llu", (unsigned long long)n1, (unsigned long long)n2);
+    CHECK(m1 && p.is_legal(m1), "nnue search move legal");
+    s.opt.d1_utility = true; s.opt.draw_value = 650;
+    s.new_game(); s.stop = false;
+    Move m3 = s.think(p, {}, l, false);
+    CHECK(m3 && p.is_legal(m3) && std::abs(s.draw_weight() - 0.65) < 1e-9, "D1 search");
+    s.set_net(nullptr);
+}
+
 int main(int argc, char** argv) {
     std::string dir = argc > 1 ? argv[1] : "tests/data";
     bool full = argc > 2 && std::string(argv[2]) == "--full";
@@ -194,6 +274,7 @@ int main(int argc, char** argv) {
     test_see();
     test_search();
     test_tablebase();
+    test_nnue();
     run_perft_file(dir + "/perft_standard.epd", cap);
     run_perft_file(dir + "/perft_960.epd", cap);
     std::printf("%d checks, %d failures\n", checks, failures);

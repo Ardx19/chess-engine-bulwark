@@ -32,17 +32,80 @@ bool* Options::flag(const std::string& n) {
     if (n == "D3_Rule50Scale") return &d3_rule50;
     if (n == "D5_StalemateGuard") return &d5_stalemate;
     if (n == "D4_Syzygy") return &d4_syzygy;
+    if (n == "D1_WDLUtility") return &d1_utility;
+    if (n == "DefenseMode") return &d2_defense;
+    if (n == "D6_PerpetualSeek") return &d6_perpetual;
+    if (n == "D7_FortressDetect") return &d7_fortress;
+    if (n == "UCI_ShowWDL") return &show_wdl;
     return nullptr;
 }
 
-int Searcher::eval_of(const Position& pos) const {
-    int e = Eval::evaluate(pos);
-    if (opt.d3_rule50) e = e * (212 - std::min(pos.rule50, 211)) / 212;   // D3: 50-move awareness
+constexpr int EVAL_CAP = 10000;   // static evals stay well inside the mate / tablebase bands
+
+int Searcher::utility_units(const double* p, Color stm) const {
+    double d = stm == root_stm_ ? d_ : 1.0 - d_;          // opponent nodes weight draws by 1 - d (negamax-consistent)
+    double u = std::clamp(p[0] + d * p[1], 1e-6, 1.0 - 1e-6);
+    return int(std::lround(400.0 * std::log(u / (1.0 - u))));
+}
+
+int Searcher::evaluate(int ply) {
+    const Position& pos = stack_[ply];
+    if (!net_) return Eval::evaluate(pos);
+    float out[3];
+    if (net_->quantized) {
+        int q = ply;
+        while (!acc_[q].computed) --q;                     // acc_[0] is refreshed at the root
+        for (int i = q + 1; i <= ply; ++i) NNUE::update(*net_, stack_[i - 1], stack_[i], acc_[i - 1], acc_[i]);
+        NNUE::output(*net_, acc_[ply], pos.stm, out);
+    } else {
+        net_->forward(pos, out);
+    }
+    if (net_->heads == 1) return std::clamp(int(std::lround(400.0 * out[0])), -EVAL_CAP, EVAL_CAP);
+    double p[3];
+    NNUE::wdl_probs(out, 3, p);
+    return utility_units(p, pos.stm);
+}
+
+int Searcher::adjust(int ply, int e) const {
+    const int dr = draw_score(ply);
+    if (opt.d3_rule50) e = dr + (e - dr) * (212 - std::min(stack_[ply].rule50, 211)) / 212;   // D3: 50-move awareness
+    if (fortress_) e = dr + (e - dr) / 2;                                                       // D7
     return e;
+}
+
+int Searcher::static_eval(const Position& pos) {
+    stack_[0] = pos;
+    root_stm_ = pos.stm;
+    d_ = 0.5;
+    draw_us_ = 0;
+    if (net_ && net_->quantized) NNUE::refresh(*net_, pos, acc_[0]);
+    return evaluate(0);
+}
+
+bool Searcher::leaf_wdl(int* wdl) {
+    if (!net_ || !net_->wdl()) return false;
+    Position p = stack_[0];
+    for (int i = 0; i < pv_len_[0]; ++i) {
+        MoveList l; generate_legal(p, l);
+        bool ok = false;
+        for (Move m : l) ok |= m == pv_[0][i];
+        if (!ok) break;
+        p = p.make(pv_[0][i]);
+    }
+    float out[3];
+    double pr[3];
+    net_->forward(p, out);
+    NNUE::wdl_probs(out, 3, pr);
+    if (p.stm != root_stm_) std::swap(pr[0], pr[2]);
+    for (int k = 0; k < 3; ++k) wdl[k] = int(std::lround(pr[k] * 1000));
+    return true;
 }
 
 void Searcher::new_game() {
     tt.clear();
+    util_tag_ = ~0ULL;
+    last_wdl_[0] = 0; last_wdl_[1] = 1; last_wdl_[2] = 0;
+    fortress_moves_ = 0;
     std::memset(history_, 0, sizeof(history_));
     std::memset(killers_, 0, sizeof(killers_));
 }
@@ -98,7 +161,7 @@ int Searcher::score_moves(const Position& pos, int ply, Move tt_move, MoveList& 
     return ml.size();
 }
 
-int Searcher::qsearch(int ply, int alpha, int beta) {
+int Searcher::qsearch(int ply, int alpha, int beta, bool first) {
     if ((++nodes_ & 2047) == 0) check_time();
     if (stopped_) return 0;
     seldepth_ = std::max(seldepth_, ply);
@@ -106,9 +169,9 @@ int Searcher::qsearch(int ply, int alpha, int beta) {
     keys_[hist_n_ + ply] = pos.key;
     pv_len_[ply] = ply;
 
-    if (ply > 0 && is_draw(ply)) return 0;
-    if (pos.rule50 >= 100) { MoveList l; generate_legal(pos, l); return (pos.in_check() && !l.size()) ? -MATE + ply : 0; }
-    if (ply >= MAX_PLY) return eval_of(pos);
+    if (ply > 0 && is_draw(ply)) return draw_score(ply);
+    if (pos.rule50 >= 100) { MoveList l; generate_legal(pos, l); return (pos.in_check() && !l.size()) ? -MATE + ply : draw_score(ply); }
+    if (ply >= MAX_PLY) return adjust(ply, evaluate(ply));
 
     TTData tte;
     bool found = tt.probe(pos.key, tte);
@@ -122,21 +185,23 @@ int Searcher::qsearch(int ply, int alpha, int beta) {
 
     bool in_check = pos.in_check();
     int best = -INF, eval = NO_EVAL;
+    bool quiet_checks = false;
     if (!in_check) {
         // D5: with little material a side with no legal move is stalemated; do not stand pat on it.
         if (opt.d5_stalemate && popcount(pos.pieces()) <= 8) {
             MoveList l; generate_legal(pos, l);
-            if (!l.size()) return 0;
+            if (!l.size()) return draw_score(ply);
         }
-        eval = found && tte.eval != NO_EVAL ? tte.eval : Eval::evaluate(pos);
-        int e = opt.d3_rule50 ? eval * (212 - std::min(pos.rule50, 211)) / 212 : eval;
-        best = e;
+        eval = found && tte.eval != NO_EVAL ? tte.eval : evaluate(ply);
+        best = adjust(ply, eval);
         if (best >= beta) return best;
+        // D6: far below alpha at the first qsearch ply, also try quiet checks (perpetual-check seeking).
+        quiet_checks = opt.d6_perpetual && first && best + 250 <= alpha && alpha < DECISIVE;
         alpha = std::max(alpha, best);
     }
 
     MoveList ml;
-    if (in_check) generate<GEN_ALL>(pos, ml); else generate<GEN_CAPTURES>(pos, ml);
+    if (in_check || quiet_checks) generate<GEN_ALL>(pos, ml); else generate<GEN_CAPTURES>(pos, ml);
     int scores[256];
     score_moves(pos, ply, found ? tte.move : MOVE_NONE, ml, scores);
 
@@ -151,6 +216,8 @@ int Searcher::qsearch(int ply, int alpha, int beta) {
         ++legal;
         if (!in_check && scores[i] < -500000) continue;   // skip losing captures (SEE < 0) in qsearch
         stack_[ply + 1] = pos.make(m);
+        acc_[ply + 1].computed = false;
+        if (quiet_checks && !m.is_capture() && !m.is_promo() && !stack_[ply + 1].in_check()) continue;
         int score = -qsearch(ply + 1, -beta, -alpha);
         if (stopped_) return 0;
         if (score > best) {
@@ -172,7 +239,7 @@ int Searcher::qsearch(int ply, int alpha, int beta) {
 
 template <bool PV>
 int Searcher::search(int ply, int depth, int alpha, int beta) {
-    if (depth <= 0) return qsearch(ply, alpha, beta);
+    if (depth <= 0) return qsearch(ply, alpha, beta, true);
     if ((++nodes_ & 2047) == 0) check_time();
     if (stopped_) return 0;
     seldepth_ = std::max(seldepth_, ply);
@@ -185,10 +252,10 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
     if (!root) {
         if (pos.rule50 >= 100) {
             MoveList l; generate_legal(pos, l);
-            return (in_check && !l.size()) ? -MATE + ply : 0;
+            return (in_check && !l.size()) ? -MATE + ply : draw_score(ply);
         }
-        if (is_draw(ply)) return 0;
-        if (ply >= MAX_PLY) return in_check ? 0 : eval_of(pos);
+        if (is_draw(ply)) return draw_score(ply);
+        if (ply >= MAX_PLY) return in_check ? draw_score(ply) : adjust(ply, evaluate(ply));
         alpha = std::max(alpha, -MATE + ply);
         beta = std::min(beta, MATE - ply - 1);
         if (alpha >= beta) return alpha;
@@ -211,14 +278,13 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
         int w = TB::probe_wdl(pos);
         if (w != TB::FAIL) {
             ++tb_hits_;
-            int sc = w == TB::WIN ? TB_WIN - ply : w == TB::LOSS ? -TB_WIN + ply : 0;   // cursed/blessed = draw
+            int sc = w == TB::WIN ? TB_WIN - ply : w == TB::LOSS ? -TB_WIN + ply : draw_score(ply);   // cursed/blessed = draw
             return sc;
         }
     }
 
-    int raw_eval = in_check ? NO_EVAL : (found && tte.eval != NO_EVAL ? tte.eval : Eval::evaluate(pos));
-    int eval = raw_eval;
-    if (!in_check && opt.d3_rule50) eval = raw_eval * (212 - std::min(pos.rule50, 211)) / 212;
+    int raw_eval = in_check ? NO_EVAL : (found && tte.eval != NO_EVAL ? tte.eval : evaluate(ply));
+    int eval = in_check ? NO_EVAL : adjust(ply, raw_eval);
     static_eval_[ply] = eval;
     const bool improving = opt.improving && !in_check && ply >= 2 && static_eval_[ply - 2] != NO_EVAL &&
                            eval > static_eval_[ply - 2];
@@ -232,6 +298,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
             pos.has_non_pawn_material(pos.stm)) {
             int R = 3 + depth / 3 + std::min((eval - beta) / 200, 3);
             stack_[ply + 1] = pos.make_null();
+            acc_[ply + 1].computed = false;
             null_prev_[ply + 1] = true;
             int s = -search<false>(ply + 1, depth - R, -beta, -beta + 1);
             null_prev_[ply + 1] = false;
@@ -279,6 +346,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
         }
 
         stack_[ply + 1] = pos.make(m);
+        acc_[ply + 1].computed = false;
         null_prev_[ply + 1] = false;
         tt.prefetch(stack_[ply + 1].key);
         const bool gives_check = stack_[ply + 1].in_check();
@@ -335,7 +403,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
         }
     }
 
-    if (legal == 0) return in_check ? -MATE + ply : 0;
+    if (legal == 0) return in_check ? -MATE + ply : draw_score(ply);
 
     int stored = best;
     if (stored >= DECISIVE) stored += ply; else if (stored <= -DECISIVE) stored -= ply;
@@ -353,6 +421,8 @@ void Searcher::print_info(int depth, int score) {
     } else sc = "cp " + std::to_string(score);
     std::string pv;
     for (int i = 0; i < pv_len_[0]; ++i) pv += " " + stack_[0].move_to_uci(pv_[0][i], opt.chess960);
+    int wdl[3];
+    if (opt.show_wdl && leaf_wdl(wdl)) sc += " wdl " + std::to_string(wdl[0]) + " " + std::to_string(wdl[1]) + " " + std::to_string(wdl[2]);
     std::printf("info depth %d seldepth %d score %s nodes %llu nps %llu hashfull %d tbhits %llu time %lld pv%s\n", depth,
                 seldepth_, sc.c_str(), (unsigned long long)nodes_, (unsigned long long)(nodes_ * 1000 / ms),
                 tt.hashfull(), (unsigned long long)tb_hits_, (long long)ms, pv.c_str());
@@ -377,6 +447,28 @@ Move Searcher::think(const Position& root, const std::vector<U64>& history, cons
     tb_hits_ = 0;
     root_allowed_.count = 0;
     root_filtered_ = opt.d4_syzygy && TB::root_filter(root, root_allowed_);
+
+    // D1/D2: draw weight for the root side. Scores and static evals depend on it (and on the root side when it is
+    // not neutral), so the TT is cleared whenever that configuration or the net changes.
+    root_stm_ = root.stm;
+    double d = opt.d1_utility ? opt.draw_value / 1000.0 : 0.5;
+    if (opt.d2_defense && net_ && net_->wdl()) {
+        double p_loss = root.stm == last_color_ ? last_wdl_[2] : last_wdl_[0];
+        if (p_loss * 1000.0 >= opt.defense_loss_threshold) d = opt.defense_draw_value / 1000.0;
+    }
+    d_ = std::clamp(d, 0.001, 0.999);
+    draw_us_ = int(std::lround(400.0 * std::log(d_ / (1.0 - d_))));
+    int dm = int(std::lround(d_ * 1000));
+    uint64_t tag = net_gen_ * 4096 + uint64_t(dm) * 2 + (dm != 500 ? uint64_t(root.stm) : 0);
+    if (tag != util_tag_) { if (util_tag_ != ~0ULL) tt.clear(); util_tag_ = tag; }
+    if (net_ && net_->quantized) NNUE::refresh(*net_, root, acc_[0]);
+    else acc_[0].computed = true;
+
+    // D7: a fortress verdict stays on for a few moves unless the game makes progress (zeroing move at the root).
+    if (!opt.d7_fortress || root.rule50 == 0) fortress_moves_ = 0;
+    fortress_ = fortress_moves_ > 0;
+    if (fortress_moves_ > 0) --fortress_moves_;
+    int iter_scores[MAX_PLY];
 
     // Time management: soft = remaining/20 + inc/2; hard a few times soft, capped well below remaining.
     soft_ms_ = hard_ms_ = 0;
@@ -415,6 +507,19 @@ Move Searcher::think(const Position& root, const std::vector<U64>& history, cons
         }
         if (stopped_) break;
         score = s;
+        iter_scores[d] = s;
+        if (opt.d7_fortress && !fortress_ && d >= 10 && std::abs(s) >= 150 && std::abs(s) < DECISIVE && pv_len_[0] >= 8) {
+            int lo = s, hi = s;
+            for (int k = d - 5; k < d; ++k) { lo = std::min(lo, iter_scores[k]); hi = std::max(hi, iter_scores[k]); }
+            bool zeroing = false;
+            Position p = root;
+            for (int k = 0; k < pv_len_[0] && !zeroing; ++k) {
+                Move m = pv_[0][k];
+                zeroing = m.is_capture() || type_of(p.board[m.from()]) == PAWN;
+                p = p.make(m);
+            }
+            if (hi - lo <= 8 && !zeroing) { fortress_ = true; fortress_moves_ = 8; }
+        }
         if (print) print_info(d, score);
         stable = (best == prev_best) ? stable + 1 : 0;
         if (soft_ms_) {
@@ -428,6 +533,11 @@ Move Searcher::think(const Position& root, const std::vector<U64>& history, cons
             if (elapsed_ms() >= soft_ms_ * factor) break;
         }
         if (!lim.infinite && score >= MATE_IN_MAX && MATE - score <= d) break;   // shortest mate already proven
+    }
+    int wdl[3];
+    if (leaf_wdl(wdl)) {
+        for (int k = 0; k < 3; ++k) last_wdl_[k] = wdl[k] / 1000.0;
+        last_color_ = root.stm;
     }
     if (!best) {   // no completed iteration or no legal moves: fall back to any legal move
         MoveList l; generate_legal(root, l);

@@ -4,8 +4,10 @@
 #include "nnue.h"
 #include "perft.h"
 #include "tablebase.h"
+#include <algorithm>
 #include <cstdio>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <thread>
 
@@ -16,6 +18,21 @@ struct Engine {
     Position pos;
     std::vector<U64> history;   // keys of positions before `pos`
     std::thread worker;
+    std::unique_ptr<NNUE::Net> net;   // null = handcrafted eval
+
+    // Load (or clear, for an empty path) the evaluation net. On failure the previous evaluation stays in use.
+    bool load_net(const std::string& path) {
+        if (path.empty() || path == "<empty>") { searcher.set_net(nullptr); net.reset(); return true; }
+        auto n = std::make_unique<NNUE::Net>();
+        std::string err;
+        if (!n->load(path, &err)) { std::printf("info string EvalFile %s: %s\n", path.c_str(), err.c_str()); return false; }
+        std::printf("info string EvalFile %s: arch %d, L1 %d, %s head, %s%s\n", path.c_str(), n->arch, n->l1,
+                    n->wdl() ? "W/D/L" : "scalar", n->quantized ? "quantised" : "float (slow, parity only)",
+                    n->quantized && !n->fast_out ? ", scalar output kernel" : "");
+        searcher.set_net(n.get());
+        net = std::move(n);
+        return true;
+    }
 
     Engine() { pos.set_fen(Position::START_FEN); }
     void join() { if (worker.joinable()) worker.join(); }
@@ -79,8 +96,12 @@ struct Engine {
         else if (name == "Move Overhead") searcher.opt.move_overhead = std::stoi(value);
         else if (name == "UCI_Chess960") searcher.opt.chess960 = value == "true";
         else if (name == "SyzygyPath") { searcher.opt.syzygy_path = value; TB::init(value); }
+        else if (name == "EvalFile") load_net(value);
+        else if (name == "DrawValue") searcher.opt.draw_value = std::clamp(std::stoi(value), 0, 1000);
+        else if (name == "DefenseDrawValue") searcher.opt.defense_draw_value = std::clamp(std::stoi(value), 0, 1000);
+        else if (name == "DefenseLossThreshold") searcher.opt.defense_loss_threshold = std::clamp(std::stoi(value), 0, 1000);
         else if (bool* f = searcher.opt.flag(name)) *f = value == "true";
-        // Threads, SyzygyPath, EvalFile, D* switches: accepted, wired up in later phases.
+        // Threads is fixed at 1 (accepted and ignored).
     }
 
     void loop() {
@@ -90,7 +111,7 @@ struct Engine {
             std::string cmd;
             is >> cmd;
             if (cmd == "uci") {
-                std::puts("id name Bulwark 0.2\nid author Aryan");
+                std::puts("id name Bulwark 0.3\nid author Aryan");
                 std::puts("option name Hash type spin default 16 min 1 max 65536");
                 std::puts("option name Threads type spin default 1 min 1 max 1");
                 std::puts("option name Move Overhead type spin default 10 min 0 max 5000");
@@ -98,7 +119,13 @@ struct Engine {
                 for (const char* n : {"Aspiration", "RFP", "NMP", "LMR", "KillersHistory", "LMPFutility", "IIR", "Improving",
                                       "SEEPrune", "TMScaling", "D3_Rule50Scale", "D4_Syzygy", "D5_StalemateGuard"})
                     std::printf("option name %s type check default true\n", n);
+                for (const char* n : {"D1_WDLUtility", "DefenseMode", "D6_PerpetualSeek", "D7_FortressDetect", "UCI_ShowWDL"})
+                    std::printf("option name %s type check default false\n", n);
+                std::puts("option name DrawValue type spin default 500 min 0 max 1000");
+                std::puts("option name DefenseDrawValue type spin default 650 min 0 max 1000");
+                std::puts("option name DefenseLossThreshold type spin default 400 min 0 max 1000");
                 std::puts("option name SyzygyPath type string default <empty>");
+                std::puts("option name EvalFile type string default <empty>");
                 std::puts("uciok");
             } else if (cmd == "isready") std::puts("readyok");
             else if (cmd == "ucinewgame") { join(); searcher.new_game(); }
@@ -116,7 +143,18 @@ struct Engine {
                 if (!net.load(net_path, &err)) std::printf("verifynet: %s\n", err.c_str());
                 else NNUE::verify(net, ref_path, lim);
             }
-            else if (cmd == "eval") std::printf("eval %d (side to move)\n", Eval::evaluate(pos));
+            else if (cmd == "eval") {
+                join();
+                std::printf("hce %d (side to move)\n", Eval::evaluate(pos));
+                if (net) {
+                    float out[3]; double p[3];
+                    net->forward(pos, out);
+                    NNUE::wdl_probs(out, net->heads, p);
+                    std::printf("nnue %d (side to move, neutral) logits", searcher.static_eval(pos));
+                    for (int h = 0; h < net->heads; ++h) std::printf(" %.4f", out[h]);
+                    std::printf(" wdl %.3f %.3f %.3f\n", p[0], p[1], p[2]);
+                }
+            }
             else if (cmd == "d") std::printf("%s\nkey %016llx\n", pos.fen(searcher.opt.chess960).c_str(), (unsigned long long)pos.key);
             std::fflush(stdout);
         }
@@ -131,8 +169,9 @@ int main(int argc, char** argv) {
     Bitboards::init();
     Zobrist::init();
     Engine e;
-    if (argc > 1 && std::string(argv[1]) == "bench") {
-        run_bench(e.searcher, argc > 2 ? std::atoi(argv[2]) : 6, argc > 3);
+    if (argc > 1 && std::string(argv[1]) == "bench") {   // bench [depth] [evalfile] [verbose]
+        if (argc > 3 && std::string(argv[3]) != "-" && !e.load_net(argv[3])) return 1;
+        run_bench(e.searcher, argc > 2 ? std::atoi(argv[2]) : 6, argc > 4);
         return 0;
     }
     e.loop();
