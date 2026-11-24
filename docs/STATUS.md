@@ -1,4 +1,4 @@
-# Bulwark: project status (2026-10-21)
+# Bulwark: project status (2026-11-24)
 
 Bulwark is a bitboard C++ chess engine (UCI, Chess960, PVS search) being built into a defensive specialist. The plan is a self-trained W/D/L NNUE distilled from Lc0 and Stockfish, plus a draw-preferring utility. The claim to test: on held-out unbalanced positions the engine saves more games, at a measured strength cost.
 
@@ -9,12 +9,16 @@ Source of truth for scope: `PLAN_REMAINING.md` (uncommitted) and `project_B_nnue
 | Phase | Status |
 |---|---|
 | 0-1 Board, move generation, Chess960, perft | Done |
-| 2 UCI, search, transposition table, PeSTO eval, bench, tests | Done, with two open gates (below) |
-| 3 Selectivity ladder and defense switches | Matches done; README, UCI tests and a few scripts open |
-| 4 Data and training pipeline | Code written and tested; not yet run on real data |
-| 5 NNUE in the engine | Not started |
-| 6 Defense study (D1/D2, benchmark sets) | Not started |
-| 7-9 N2, MoE, write-up | Not started |
+| 2 UCI, search, transposition table, PeSTO eval, bench, tests | Done (UCI protocol tests added) |
+| 3 Selectivity ladder and defense switches | Done: IIR on, README, scripts, results registry |
+| 4 Data and training pipeline | Code done incl. data checks; **not yet run on real data** |
+| 5 NNUE in the engine | Code done (incremental, AVX2, EvalFile); **no trained net yet** |
+| 6 Defense study (D1/D2, benchmark sets) | Code done (D1/D2/D6/D7, harness, stats, suites); **needs the net and the runs** |
+| 7-8 N2, MoE | Code done (trainer, format v2, C++ inference, parity tests); **needs training** |
+| 9 Write-up | Waiting on results |
+
+**Update 2026-11-24.** All coding parts of the plan are implemented and tested; what remains is data generation,
+training (see `docs/TRAINING.md`) and the measurement runs. Bench is now **137,089** (IIR on).
 
 ## Engine: what works
 
@@ -23,7 +27,7 @@ Source of truth for scope: `PLAN_REMAINING.md` (uncommitted) and `project_B_nnue
 - C++ suite (`build/run_tests tests/data`): 113,820 checks, 0 failures. Includes the Syzygy tablebase test when `SYZYGY_PATH` is set.
 - Perft exact on the standard CPW positions and on 241 Chess960 positions checked against python-chess. ASan/UBSan debug build exists.
 - Movegen speed about 86 Mnps (from Phase 1 notes).
-- `bulwark bench` is deterministic: **163,284 nodes** on every run (commit 8cd930c). Speed about 0.97 Mnps in bench.
+- `bulwark bench` is deterministic: **137,089 nodes** with IIR on (163,284 at 8cd930c). Speed about 0.97 Mnps in bench.
 
 **UCI and search**
 - UCI commands: `position` (startpos/fen, moves), `go` (depth, nodes, movetime, clock, infinite), `stop`, `ucinewgame`, `setoption`, `isready`, `quit`.
@@ -49,8 +53,8 @@ Source of truth for scope: `PLAN_REMAINING.md` (uncommitted) and `project_B_nnue
 | D4_Syzygy | on | +35.5 ± 19.1 (600 games), close to passing |
 | D5_StalemateGuard | on | −9.3 ± 19.0 (600 games), inconclusive, slightly negative |
 
-**Two decisions pending from the overnight results** (recorded in `results/overnight-20261020-0332/REPORT.txt`):
-- **IIR should be turned on.** The re-test over 1,200 games gave +21.7 ± 14.1, reversing the earlier −15. It's still set to off in code.
+**Decisions from the overnight results** (recorded in `results/overnight-20261020-0332/REPORT.txt`):
+- **IIR is now on** (commit d160dd8). The re-test over 1,200 games gave +21.7 ± 14.1, reversing the earlier −15.
 - **D5 is slightly negative** but inconclusive. It stays on until more evidence.
 
 **Strength benchmark**
@@ -99,18 +103,27 @@ Source of truth for scope: `PLAN_REMAINING.md` (uncommitted) and `project_B_nnue
 
 **Not done:** Kaggle pilot and production data runs, GPU training, the tablebase-override check against the Lichess API, the leakage check, bullet cross-check converter, any trained net.
 
-## Phase 3: what remains
+## Added on 2026-11-24 (all committed)
 
-1. Turn IIR on and commit (defaults set from the results).
-2. UCI protocol tests: `position`/`go`/`stop`/`ucinewgame`, Chess960 castling notation.
-3. Remaining match scripts and `results/registry.csv` logging.
-4. README with the per-feature Elo table, perft speed, bench count and benchmark result.
+- Phase 3: IIR on; `tests/test_uci.py` (13 protocol tests incl. Chess960 castling spelling); `go searchmoves`;
+  `scripts/netcheck.sh`, `scripts/strength.sh`, `scripts/registry.py` + `results/registry.csv` (seeded with all past runs);
+  `README.md`.
+- Phase 4: `pipeline/tb_check.py` (labels vs Lichess API / local tables), `pipeline/check_splits.py` (session reuse,
+  val/test overlap with train), `pipeline/to_bullet.py`; fixed the pilot's Syzygy download (tables went to /dev/null).
+- Phase 5: `EvalFile`; per-ply accumulator stack updated from board diffs; AVX2 output kernel; exact parity with the
+  scalar reference; `eval` prints net W/D/L; `bench <depth> <net>`.
+- Phase 6: D1 (`D1_WDLUtility`, `DrawValue`), D2 (`DefenseMode`, `DefenseDrawValue`, `DefenseLossThreshold`),
+  D6 (`D6_PerpetualSeek`), D7 (`D7_FortressDetect`), `UCI_ShowWDL`; TT cleared on utility changes; benchmark-set carving,
+  save-rate harness, paired statistics, calibration metrics, tablebase and fortress suite tools, teacher-agreement
+  evaluator (`nnue/evaluate.py`).
+- Phases 7-8: N2 and N3 (piece-count and learned routers, upcycling, load-balancing loss) in the trainer; export
+  format v2; C++ inference with king buckets, Finny tables, int8 L2/router kernels; float parity with PyTorch < 1e-4.
+- Measured training speed on this laptop's CPU: N1 ~45k positions/s, N2/N3 ~20k/s (`docs/TRAINING.md`).
+- Search speed with a net (random weights, bench depth 6): N1 256 ~0.73 Mnps, N2 512 ~0.31 Mnps (HCE ~1.0 Mnps).
 
-## Repository and uncommitted work
+## Repository
 
-- Last commit: `8cd930c`, on branch `master`.
-- **Uncommitted, to commit next:** `PLAN_REMAINING.md`, `scripts/overnight.sh`, `scripts/overnight_report.py`, `scripts/watchdog.sh`, `scripts/gen_dfrc.py`, and the edit to `scripts/soak.sh`. The overnight outputs in `results/` are gitignored.
-- `docs/STATUS.md` (this file) is new.
+- Branch `master`; everything is committed. Overnight outputs in `results/` are gitignored except `results/registry.csv`.
 
 ## Infrastructure and environment
 
@@ -121,9 +134,8 @@ Source of truth for scope: `PLAN_REMAINING.md` (uncommitted) and `project_B_nnue
 
 ## Known issues and debt
 
-- **IIR** still defaults to off in code despite the positive re-test.
 - **Ladder deviations:** 4+0.04 time control and a 600-game cap, so several steps have no SPRT verdict. Point estimates stay on.
-- **Threads** is fixed at 1; no `searchmoves`, no pondering.
+- **Threads** is fixed at 1; no pondering.
 - **Syzygy root filter** only applies at 5 pieces or fewer.
 - **Quantization error:** about 5 cp mean; may cost Elo at Phase 5. QAT is the fallback.
 - **Position size** about 700 bytes (copy-make); may matter for NPS once accumulators land.
@@ -133,8 +145,10 @@ Source of truth for scope: `PLAN_REMAINING.md` (uncommitted) and `project_B_nnue
 
 ## Next steps
 
-1. Turn IIR on, record the bench count (163,284 at 8cd930c), commit the uncommitted work.
-2. Finish Phase 3: UCI tests, remaining scripts, README.
-3. Phase 4 data pipeline on the server: SSH access, repo copy, pilot run, then the full relabel.
-4. Phase 4 training on Kaggle GPUs (or server CPU if fast enough): N1 and N1-WDL, export and `verifynet` checks.
-5. Phase 5: NNUE in the search.
+1. Data: pilot run, data checks, then the full relabel (server or Kaggle CPU), `make_training`.
+2. Train N1 and N1-WDL (`docs/TRAINING.md`), export, `verifynet`, register in `nets/registry.csv`.
+3. NNUE vs HCE at fixed nodes and fixed time; retune pruning margins if the eval scale shifts; strength benchmark.
+4. Benchmark sets from UHO, `N_sf` calibration, defense study on dev then test, fortress / tablebase suites.
+5. Stretch: N2, then N3 variants; equal-active-compute table.
+6. Open engineering debt: NPS with nets (explicit SIMD for accumulator updates), Threads = 1, Ordo for ratings,
+   curating the fortress suite (no public suite exists), top-2 routing (optional N3 variant D).

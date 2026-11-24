@@ -1,6 +1,11 @@
 # Bulwark: plan for the remaining work (Project B, defensive NNUE chess engine)
 
 > Source of truth for scope and statistics: `project_B_nnue_chess_engine.md`. Frozen formats: `docs/interfaces.md`, `docs/pipeline.md`. Written 2026-10-09.
+>
+> **Update 2026-11-24:** every coding item below is implemented, tested and committed (see `docs/STATUS.md`,
+> "Added on 2026-11-24"). What is left is running things: the data pilot and relabel, training (`docs/TRAINING.md`),
+> and the matches / save-rate runs that fill the tables. Items still open in code: optional top-2 routing (N3 variant D),
+> Ordo instead of the internal rating fit, faster accumulator updates, Lazy SMP (stretch).
 
 
 ## Context
