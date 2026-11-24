@@ -3,7 +3,8 @@ build*/
 data/
 nets/*.nnue
 __pycache__/
-results/
+results/*
+!results/registry.csv
 engines/
 config.json
 ckpt/

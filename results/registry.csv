@@ -1,0 +1,17 @@
+date,commit,bench,kind,new,base,setting,games,wins,draws,losses,elo,elo_err,llr,bounds,verdict,metric,ci95,source,note
+2026-10-07,ladder,-,ladder,+Aspiration,step 0,"4+0.04, cap 600",600,243,150,207,20.87,20.58,1.15,"[0.00, 10.00]",no verdict,,,results/ladder/step1.log,ladder step 1
+2026-10-07,ladder,-,ladder,+RFP,step 1,"4+0.04, cap 600",600,267,156,177,52.51,23.46,2.80,"[0.00, 10.00]",no verdict,,,results/ladder/step2.log,ladder step 2
+2026-10-07,ladder,-,ladder,+NMP,step 2,"4+0.04, cap 600",444,213,118,113,79.62,29.38,2.96,"[0.00, 10.00]",H1,,,results/ladder/step3.log,ladder step 3
+2026-10-07,ladder,-,ladder,+LMR,step 3,"4+0.04, cap 600",252,136,81,35,147.52,37.77,2.95,"[0.00, 10.00]",H1,,,results/ladder/step4.log,ladder step 4
+2026-10-07,ladder,-,ladder,+KillersHistory,step 4,"4+0.04, cap 600",250,134,83,33,148.85,35.76,2.95,"[0.00, 10.00]",H1,,,results/ladder/step5.log,ladder step 5
+2026-10-07,ladder,-,ladder,+LMPFutility,step 5,"4+0.04, cap 600",600,224,234,142,47.78,20.96,2.84,"[0.00, 10.00]",no verdict,,,results/ladder/step6.log,ladder step 6
+2026-10-07,ladder,-,ladder,+IIR,step 6,"4+0.04, cap 600",600,156,262,182,-15.06,21.77,-1.20,"[0.00, 10.00]",no verdict,,,results/ladder/step7.log,ladder step 7
+2026-10-07,ladder,-,ladder,+Improving,step 7,"4+0.04, cap 600",600,172,270,158,8.11,20.32,0.30,"[0.00, 10.00]",no verdict,,,results/ladder/step8.log,ladder step 8
+2026-10-07,ladder,-,ladder,+SEEPrune,step 8,"4+0.04, cap 600",516,186,226,104,55.68,21.60,3.01,"[0.00, 10.00]",H1,,,results/ladder/step9.log,ladder step 9
+2026-10-20,8cd930c,163284,sprt,TMScaling=true,TMScaling=false,4+0.04,600,187,260,153,19.71,20.20,1.35,"[-5.00, 5.00]",no verdict,,,results/overnight-20261020-0332/features/TMScaling.log,"one-switch SPRT, overnight"
+2026-10-20,8cd930c,163284,sprt,D3_Rule50Scale=true,D3_Rule50Scale=false,4+0.04,600,171,271,158,7.53,20.66,0.50,"[-5.00, 5.00]",no verdict,,,results/overnight-20261020-0332/features/D3_Rule50Scale.log,"one-switch SPRT, overnight"
+2026-10-20,8cd930c,163284,sprt,D5_StalemateGuard=true,D5_StalemateGuard=false,4+0.04,600,149,286,165,-9.27,18.99,-0.67,"[-5.00, 5.00]",no verdict,,,results/overnight-20261020-0332/features/D5_StalemateGuard.log,"one-switch SPRT, overnight"
+2026-10-20,8cd930c,163284,sprt,D4_Syzygy=true,D4_Syzygy=false,4+0.04,600,200,261,139,35.45,19.09,2.55,"[-5.00, 5.00]",no verdict,,,results/overnight-20261020-0332/features/D4_Syzygy.log,"one-switch SPRT, overnight"
+2026-10-20,8cd930c,163284,sprt,IIR=true,IIR=false,4+0.04,1200,352,571,277,21.74,14.10,2.51,"[0.00, 10.00]",no verdict,,,results/overnight-20261020-0332/features/IIR.log,"one-switch SPRT, overnight"
+2026-10-20,8cd930c,163284,sprt,8cd930c final,bulwark-p2 (Phase 2),4+0.04,400,343,44,13,407.29,49.10,,,no verdict,,,results/overnight-20261020-0332/vs_p2.log,sum of the ladder
+2026-10-20,8cd930c,163284,strength,8cd930c HCE,SF19 UCI_Elo 2600/2800/3000,"60+0.6, 600 games",,,,,,,,,,rough rating estimate (CCRL 40/4 scale via UCI_Elo): 2750 +/- 31,,,"results/overnight-20261020-0332/REPORT.txt (ML fit, not Ordo)"
