@@ -233,6 +233,47 @@ class Training(unittest.TestCase):
         self.assertLess(errs["float"], 1e-4)
         self.assertLess(errs["quantized"], 0.15)
 
+    def test_n2_n3_train_export_and_engine_parity(self):
+        """N2 (dense) and N3 (piece-count / learned router, upcycled from N2): train, resume-safe config, export v2,
+        C++ float inference matches PyTorch, quantised stays close."""
+        exe = os.path.join(ROOT, "build", "bulwark")
+        import subprocess
+        from nnue.train import train
+        from nnue.export import export_net, load_checkpoint_model, write_reference
+        val = glob.glob(os.path.join(self.tmp, "val", "*.bin"))[0]
+        n2 = train(self.cfg("n2", arch="n2", n=32, steps=30, lr=3e-3), resume="none")
+        runs = {"n2": n2["final"]}
+        for router in ("count", "learned"):
+            r = train(self.cfg(f"n3{router}", arch="n3", n=32, k=4, router=router, steps=20, lr=3e-3,
+                               init_from=n2["final"]), resume="none")
+            runs[router] = r["final"]
+        for name, ck in runs.items():
+            m = load_checkpoint_model(ck)
+            info = export_net(m, os.path.join(self.tmp, f"nets_{name}"))
+            ref = os.path.join(self.tmp, f"ref_{name}.jsonl")
+            write_reference(m, val, ref, 300)
+            if not os.path.exists(exe):
+                continue
+            errs = {}
+            for kind in ("float", "quantized"):
+                res = subprocess.run([exe], input=f"verifynet {info[kind]} {ref}\nquit\n", capture_output=True, text=True).stdout
+                line = [l for l in res.splitlines() if l.startswith("verifynet")][0]
+                errs[kind] = float(line.split("max abs error ")[1].split(",")[0])
+            self.assertLess(errs["float"], 1e-4, name)
+            self.assertLess(errs["quantized"], 0.25, f"{name}: {errs}")
+
+    def test_upcycled_experts_start_equal_to_dense(self):
+        import torch
+        from nnue.model import NNUE2
+        from nnue.data import features_n2
+        torch.manual_seed(0)
+        dense = NNUE2(32, 3, 16, 32, 1, "none")
+        moe = NNUE2(32, 3, 16, 32, 4, "count")
+        moe.upcycle_from(dense, noise=0.0)
+        u, t, sc, pc = features_n2(np.concatenate([R.from_fen(f) for f in Features.FENS]))
+        args = [torch.from_numpy(x) for x in (u, t, sc, pc)]
+        torch.testing.assert_close(dense(*args), moe(*args))
+
     def test_model_color_flip_invariance(self):
         import torch
         from nnue.model import NNUE

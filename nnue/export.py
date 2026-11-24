@@ -6,6 +6,12 @@ int32 bias scaled by QA*QA*QB. Inference: out = (sum_i clamp(acc_i, 0, QA)^2 * w
 File layout (little endian): magic "NNUEWDL1" | u32 version=1 | u32 arch id (1 N1, 2 N1-WDL) | u32 L1 | u32 buckets=1 |
 u32 heads | i16 ft_w[768][L1] | i16 ft_b[L1] | i16 out_w[heads][2*L1] | i32 out_b[heads] | 32-byte sha256 of everything before.
 The float file uses magic "NNUEFLT1" with the same layout in float32.
+
+Version 2 (N2 = arch 3, N3 = arch 4): magic | u32 version=2 | arch | L1 | buckets=8 | heads | L2 | L3 | K | router
+(0 none, 1 piece count, 2 learned) | i16 ft_w[8*768][L1] | i16 ft_b[L1] | i8 l2_w[K*L2][2*L1] (QB = 64) | f32 l2_b[K*L2] |
+f32 l3_w[K][L3][L2] | f32 l3_b[K][L3] | f32 out_w[K][heads][L3] | f32 out_b[K][heads] |
+(router 2: i8 r_w[K][2*L1] (QB) | f32 r_s[K][4] | f32 r_b[K]) | sha256. Float v2: same order, everything f32.
+L2 inputs in the engine are x_q = round(clamp(acc, 0, QA)^2 / 512) in 0..127, so l2 = sum(x_q * w_q) / (127 * 64) + b.
 """
 from __future__ import annotations
 
@@ -19,8 +25,8 @@ import numpy as np
 import torch
 
 from pipeline.records import TRAIN_DTYPE, read_shard, to_fen
-from .data import PAD, features
-from .model import NNUE
+from .data import PAD, make_batch
+from .model import NNUE, NNUE2, run_model
 
 QA, QB = 255, 64
 
@@ -33,7 +39,44 @@ def _weights(model: NNUE):
     return ft_w, ft_b, out_w, out_b
 
 
-def export_net(model: NNUE, out_dir: str) -> dict:
+def _write_pair(out_dir, qbody: bytes, fbody: bytes) -> dict:
+    qbody += hashlib.sha256(qbody).digest()
+    fbody += hashlib.sha256(fbody).digest()
+    sha8 = hashlib.sha256(qbody).hexdigest()[:8]
+    qpath, fpath = os.path.join(out_dir, f"net-{sha8}.nnue"), os.path.join(out_dir, f"net-{sha8}.nnuef")
+    with open(qpath, "wb") as f:
+        f.write(qbody)
+    with open(fpath, "wb") as f:
+        f.write(fbody)
+    return {"sha8": sha8, "quantized": qpath, "float": fpath}
+
+
+def export_net_v2(model: NNUE2, out_dir: str) -> dict:
+    f32 = lambda t: t.detach().cpu().float().numpy().astype("<f4")        # noqa: E731
+    arch = 3 if model.k == 1 else 4
+    router = {"none": 0, "count": 1, "learned": 2}[model.router]
+    hdr = lambda magic: magic + struct.pack("<9I", 2, arch, model.n, 8, model.head, model.l2n, model.l3n, model.k, router)  # noqa: E731
+    from .data import N2_PAD
+    ft_w = f32(model.ft.weight)[:N2_PAD]
+    ft_b, l2_w, l2_b = f32(model.ft_bias), f32(model.l2.weight), f32(model.l2.bias)
+    tail = [f32(model.l3_w), f32(model.l3_b), f32(model.out_w), f32(model.out_b)]
+    q16 = lambda a, s: np.clip(np.round(a * s), -32768, 32767).astype("<i2")      # noqa: E731
+    q8 = lambda a: np.clip(np.round(a * QB), -127, 127).astype("i1")              # noqa: E731
+    qbody = hdr(b"NNUEWDL1") + q16(ft_w, QA).tobytes() + q16(ft_b, QA).tobytes() + q8(l2_w).tobytes() + l2_b.tobytes()
+    fbody = hdr(b"NNUEFLT1") + ft_w.tobytes() + ft_b.tobytes() + l2_w.tobytes() + l2_b.tobytes()
+    for t in tail:
+        qbody += t.tobytes(); fbody += t.tobytes()
+    if router == 2:
+        rw, rs, rb = f32(model.router_x.weight), f32(model.router_s.weight), f32(model.router_x.bias)
+        qbody += q8(rw).tobytes() + rs.tobytes() + rb.tobytes()
+        fbody += rw.tobytes() + rs.tobytes() + rb.tobytes()
+    os.makedirs(out_dir, exist_ok=True)
+    return _write_pair(out_dir, qbody, fbody)
+
+
+def export_net(model, out_dir: str) -> dict:
+    if isinstance(model, NNUE2):
+        return export_net_v2(model, out_dir)
     os.makedirs(out_dir, exist_ok=True)
     ft_w, ft_b, out_w, out_b = _weights(model)
     arch = 1 if model.head == 1 else 2
@@ -61,18 +104,24 @@ def write_reference(model: NNUE, shard_path: str, out_path: str, n: int = 10000)
     """Float model outputs (logits) on the first n positions of a training/master shard, one JSON line each."""
     rec = read_shard(shard_path)[:n]
     model.eval()
-    us, them = features(rec)
-    out = model(torch.from_numpy(us), torch.from_numpy(them)).float().numpy().reshape(len(rec), -1)
+    batch = make_batch(rec, arch="n2" if isinstance(model, NNUE2) else "n1")
+    out = run_model(model, batch, "cpu").float().numpy().reshape(len(rec), -1)
     with open(out_path, "w") as f:
         for i in range(len(rec)):
             f.write(json.dumps({"fen": to_fen(rec[i]), "out": [float(x) for x in out[i]]}) + "\n")
 
 
-def load_checkpoint_model(path: str) -> NNUE:
+def load_checkpoint_model(path: str):
     ck = torch.load(path, map_location="cpu", weights_only=False)
     cfg = ck.get("cfg") or {}
     state = ck["model"]
     n = state["ft_bias"].shape[0]
+    if "l3_w" in state:
+        k, l3, l2 = state["l3_w"].shape
+        router = "learned" if "router_x.weight" in state else ("count" if k > 1 else "none")
+        m = NNUE2(n, state["out_w"].shape[1], l2, l3, k, router, cfg.get("balance", 0.01))
+        m.load_state_dict(state)
+        return m
     head = state["out.weight"].shape[0]
     m = NNUE(n, head)
     m.load_state_dict(state)

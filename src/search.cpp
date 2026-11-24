@@ -55,8 +55,8 @@ int Searcher::evaluate(int ply) {
     if (net_->quantized) {
         int q = ply;
         while (!acc_[q].computed) --q;                     // acc_[0] is refreshed at the root
-        for (int i = q + 1; i <= ply; ++i) NNUE::update(*net_, stack_[i - 1], stack_[i], acc_[i - 1], acc_[i]);
-        NNUE::output(*net_, acc_[ply], pos.stm, out);
+        for (int i = q + 1; i <= ply; ++i) NNUE::update(*net_, stack_[i - 1], stack_[i], acc_[i - 1], acc_[i], finny_.get());
+        NNUE::output(*net_, acc_[ply], pos, out);
     } else {
         net_->forward(pos, out);
     }
@@ -78,7 +78,7 @@ int Searcher::static_eval(const Position& pos) {
     root_stm_ = pos.stm;
     d_ = 0.5;
     draw_us_ = 0;
-    if (net_ && net_->quantized) NNUE::refresh(*net_, pos, acc_[0]);
+    if (net_ && net_->quantized) NNUE::refresh(*net_, pos, acc_[0], finny_.get());
     return evaluate(0);
 }
 
@@ -472,7 +472,7 @@ Move Searcher::think(const Position& root, const std::vector<U64>& history, cons
     int dm = int(std::lround(d_ * 1000));
     uint64_t tag = net_gen_ * 4096 + uint64_t(dm) * 2 + (dm != 500 ? uint64_t(root.stm) : 0);
     if (tag != util_tag_) { if (util_tag_ != ~0ULL) tt.clear(); util_tag_ = tag; }
-    if (net_ && net_->quantized) NNUE::refresh(*net_, root, acc_[0]);
+    if (net_ && net_->quantized) NNUE::refresh(*net_, root, acc_[0], finny_.get());
     else acc_[0].computed = true;
 
     // D7: a fortress verdict stays on for a few moves unless the game makes progress (zeroing move at the root).

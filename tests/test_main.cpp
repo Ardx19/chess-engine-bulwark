@@ -197,13 +197,38 @@ static NNUE::Net random_net(int l1, int heads, bool big_out, unsigned seed) {
     return n;
 }
 
+// Random quantised v2 net (king buckets, K expert stacks, router 0/1/2).
+static NNUE::Net random_net_v2(int l1, int heads, int k, int router, unsigned seed) {
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int> fw(-300, 300), fb(0, 200), w8(-127, 127);
+    std::uniform_real_distribution<float> fl(-1.0f, 1.0f);
+    NNUE::Net n;
+    n.version = 2; n.l1 = l1; n.heads = heads; n.arch = k == 1 ? 3 : 4; n.quantized = true;
+    n.l2 = 16; n.l3 = 32; n.experts = k; n.router = router;
+    n.q_ft_w.resize(size_t(NNUE::N_BUCKETS) * NNUE::FEATURES * l1); n.q_ft_b.resize(l1);
+    for (auto& w : n.q_ft_w) w = int16_t(fw(rng));
+    for (auto& b : n.q_ft_b) b = int16_t(fb(rng));
+    n.q_l2_w.resize(size_t(k) * 16 * 2 * l1);
+    for (auto& w : n.q_l2_w) w = int8_t(w8(rng));
+    auto fill = [&](std::vector<float>& v, size_t sz) { v.resize(sz); for (auto& x : v) x = fl(rng); };
+    fill(n.l2_b, size_t(k) * 16); fill(n.l3_w, size_t(k) * 32 * 16); fill(n.l3_b, size_t(k) * 32);
+    fill(n.h_w, size_t(k) * heads * 32); fill(n.h_b, size_t(k) * heads);
+    if (router == NNUE::ROUTER_LEARNED) {
+        n.q_r_w.resize(size_t(k) * 2 * l1);
+        for (auto& w : n.q_r_w) w = int8_t(w8(rng));
+        fill(n.r_s, size_t(k) * NNUE::N_SCALARS); fill(n.r_b, k);
+    }
+    n.finalize();
+    return n;
+}
+
 // Incremental accumulators (diffed along every perft path) and the SIMD output must equal the scalar full refresh
 // exactly: everything is integer arithmetic.
-static int nnue_walk(const NNUE::Net& net, const Position& p, const NNUE::Accumulator& acc, int d) {
+static int nnue_walk(const NNUE::Net& net, const Position& p, const NNUE::Accumulator& acc, int d, NNUE::Finny* finny = nullptr) {
     float a[3], b[3], c[3];
     net.forward(p, a);
-    NNUE::output(net, acc, p.stm, b, true);
-    NNUE::output(net, acc, p.stm, c, false);
+    NNUE::output(net, acc, p, b, true);
+    NNUE::output(net, acc, p, c, false);
     int bad = 0;
     for (int h = 0; h < net.heads; ++h) bad += a[h] != b[h] || a[h] != c[h];
     if (!d) return bad;
@@ -211,8 +236,8 @@ static int nnue_walk(const NNUE::Net& net, const Position& p, const NNUE::Accumu
     auto child = std::make_unique<NNUE::Accumulator>();
     for (Move m : ml) {
         Position q = p.make(m);
-        NNUE::update(net, p, q, acc, *child);
-        bad += nnue_walk(net, q, *child, d - 1);
+        NNUE::update(net, p, q, acc, *child, finny);
+        bad += nnue_walk(net, q, *child, d - 1, finny);
     }
     if (!p.in_check()) {   // null move: empty diff
         Position q = p.make_null();
@@ -239,6 +264,34 @@ static void test_nnue() {
             bad += nnue_walk(net, p, *acc, 2);
         }
         CHECK(bad == 0, "nnue incremental/simd mismatches (variant %d): %d", variant, bad);
+    }
+    // v2: king buckets + mirroring (refresh on layout change, with and without a Finny table), int8 L2, routers.
+    const char* kfens[] = {"r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+                           "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+                           "4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1",
+                           "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9"};
+    for (int router = 0; router < 3; ++router) {
+        NNUE::Net net = random_net_v2(64, 3, router ? 8 : 1, router, 31 + router);
+        auto finny = std::make_unique<NNUE::Finny>();
+        int bad = 0;
+        for (const char* f : kfens) {
+            Position p; p.set_fen(f);
+            auto acc = std::make_unique<NNUE::Accumulator>();
+            NNUE::refresh(net, p, *acc);
+            bad += nnue_walk(net, p, *acc, 2);
+            NNUE::refresh(net, p, *acc, finny.get());
+            bad += nnue_walk(net, p, *acc, 2, finny.get());
+        }
+        CHECK(bad == 0, "nnue v2 incremental/simd mismatches (router %d): %d", router, bad);
+    }
+    {   // mirrored king layout: a position and its file-mirror give the same output (no castling rights).
+        NNUE::Net net = random_net_v2(64, 3, 1, 0, 5);
+        Position a, b;
+        a.set_fen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1");
+        b.set_fen("8/5p2/4p3/r5PK/k1p3R1/8/1P1P4/8 w - - 0 1");
+        float oa[3], ob[3];
+        net.forward(a, oa); net.forward(b, ob);
+        CHECK(oa[0] == ob[0] && oa[1] == ob[1] && oa[2] == ob[2], "v2 mirror symmetry");
     }
     // Search with a net: deterministic node counts, legal moves; W/D/L utility with d != 0.5 still legal.
     NNUE::Net net = random_net(128, 3, false, 99);

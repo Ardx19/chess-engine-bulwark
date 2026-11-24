@@ -4,6 +4,7 @@
 #include "tt.h"
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -60,7 +61,7 @@ struct Options {
 
 class Searcher {
 public:
-    Searcher() : acc_(MAX_PLY + 4) { tt.resize(16); }
+    Searcher() : acc_(MAX_PLY + 4), finny_(std::make_unique<NNUE::Finny>()) { tt.resize(16); }
     TT tt;
     Options opt;
     std::atomic<bool> stop{false};
@@ -70,7 +71,7 @@ public:
     Move think(const Position& root, const std::vector<U64>& history, const Limits& lim, bool print = true);
     uint64_t nodes() const { return nodes_; }
     // Evaluation: HCE when `net` is null, else the net (quantised: incremental; float: full forward). Not owned.
-    void set_net(const NNUE::Net* net) { net_ = net; ++net_gen_; tt.clear(); }
+    void set_net(const NNUE::Net* net) { net_ = net; ++net_gen_; tt.clear(); finny_->clear(); }
     const NNUE::Net* net() const { return net_; }
     double draw_weight() const { return d_; }          // d used by the last search
     // Static evaluation of `pos` in internal units from its side to move's view, at neutral utility (d = 0.5).
@@ -108,6 +109,7 @@ private:
     const NNUE::Net* net_ = nullptr;
     uint64_t net_gen_ = 0;
     std::vector<NNUE::Accumulator> acc_;
+    std::unique_ptr<NNUE::Finny> finny_;
     double d_ = 0.5;                           // draw weight for the root side this search
     int draw_us_ = 0;                          // 400*logit(d)
     Color root_stm_ = WHITE;

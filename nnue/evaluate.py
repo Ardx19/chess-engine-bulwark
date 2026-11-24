@@ -19,19 +19,19 @@ import torch.nn.functional as F
 
 from .data import ShardStream
 from .export import load_checkpoint_model
+from .model import NNUE2, run_model
 
 
 @torch.no_grad()
 def score(models: dict, paths, batch=16384, max_records=0, device="cpu"):
     acc = {k: {"n": 0, "escore_bce": 0.0, "escore_brier": 0.0, "wdl_logloss": 0.0, "wdl_brier": 0.0} for k in models}
-    stream = ShardStream(paths, batch, seed=0, split=None, prefetch=0)
-    seen = 0
-    for b in stream:
-        us, them = torch.from_numpy(b["us"]).to(device), torch.from_numpy(b["them"]).to(device)
-        t = torch.from_numpy(b["target"]).to(device)
-        e = torch.from_numpy(b["escore"]).to(device)
-        for k, m in models.items():
-            out = m(us, them)
+    for k, m in models.items():       # same records, same order for every net (one stream per net: inputs differ)
+        arch = "n2" if isinstance(m, NNUE2) else "n1"
+        seen = 0
+        for b in ShardStream(paths, batch, seed=0, split=None, prefetch=0, arch=arch):
+            t = torch.from_numpy(b["target"]).to(device)
+            e = torch.from_numpy(b["escore"]).to(device)
+            out = run_model(m, b, device)
             if m.head == 1:
                 p = torch.sigmoid(out)
             else:
@@ -44,9 +44,9 @@ def score(models: dict, paths, batch=16384, max_records=0, device="cpu"):
             acc[k]["escore_bce"] += float(-(e * p.log() + (1 - e) * (1 - p).log()).sum())
             acc[k]["escore_brier"] += float(((p - e) ** 2).sum())
             acc[k]["n"] += len(e)
-        seen += len(e)
-        if b["cursor"]["epoch"] > 0 or (max_records and seen >= max_records):
-            break                                   # one pass over the shards (remainders < batch are dropped)
+            seen += len(e)
+            if b["cursor"]["epoch"] > 0 or (max_records and seen >= max_records):
+                break                               # one pass over the shards (remainders < batch are dropped)
     out = {}
     for k, a in acc.items():
         n = max(a["n"], 1)

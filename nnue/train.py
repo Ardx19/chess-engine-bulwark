@@ -24,10 +24,11 @@ import torch
 
 from pipeline.records import VAL
 from .data import ShardStream
-from .model import NNUE, loss_fn, metrics
+from .model import NNUE2, build_model, loss_fn, metrics, run_model
 
 # Fields that define the experiment (hashed). Run-control fields (steps, deadline, paths) may change on resume.
-HASHED = ("n", "head", "lr", "batch_size", "seed", "blend", "alpha", "warmup", "weight_decay")
+HASHED = ("n", "head", "lr", "batch_size", "seed", "blend", "alpha", "warmup", "weight_decay",
+          "arch", "l2", "l3", "k", "router", "balance", "init_from")
 
 
 def parse_duration(s: str) -> float:
@@ -39,7 +40,9 @@ def parse_duration(s: str) -> float:
 
 
 def config_hash(cfg: dict) -> str:
-    return hashlib.sha256(json.dumps({k: cfg.get(k) for k in HASHED}, sort_keys=True).encode()).hexdigest()[:16]
+    # N1 runs hash exactly as before the N2/N3 fields existed (their defaults are left out).
+    keys = HASHED if cfg.get("arch", "n1") != "n1" else HASHED[:9]
+    return hashlib.sha256(json.dumps({k: cfg.get(k) for k in keys}, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def atomic_save(obj, path: str):
@@ -77,14 +80,14 @@ def lr_at(step, cfg):
 
 
 def evaluate(model, val_paths, cfg, device, max_batches=20):
-    stream = ShardStream(val_paths, cfg["batch_size"], seed=1234, weights=tuple(cfg["blend"]), split=VAL, prefetch=0)
+    stream = ShardStream(val_paths, cfg["batch_size"], seed=1234, weights=tuple(cfg["blend"]), split=VAL, prefetch=0,
+                         arch=cfg.get("arch", "n1"))
     tot_ll = tot_br = 0.0
     n = 0
     model.eval()
     with torch.no_grad():
         for b in stream:
-            us, them = torch.from_numpy(b["us"]).to(device), torch.from_numpy(b["them"]).to(device)
-            out = model(us, them)
+            out = run_model(model, b, device)
             ll, br = metrics(model, out, torch.from_numpy(b["target"]).to(device), torch.from_numpy(b["escore"]).to(device))
             tot_ll += ll; tot_br += br; n += 1
             if n >= max_batches:
@@ -104,7 +107,11 @@ def train(cfg: dict, resume: str = "auto") -> dict:
         raise FileNotFoundError(cfg["train_glob"])
 
     random.seed(cfg["seed"]); np.random.seed(cfg["seed"]); torch.manual_seed(cfg["seed"])
-    model = NNUE(cfg["n"], cfg["head"]).to(device)
+    model = build_model(cfg)
+    if cfg.get("init_from") and isinstance(model, NNUE2):      # sparse upcycling of a trained N2 into K experts
+        from .export import load_checkpoint_model
+        model.upcycle_from(load_checkpoint_model(cfg["init_from"]))
+    model = model.to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
     use_amp = device == "cuda" and cfg.get("amp", True)
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
@@ -142,7 +149,8 @@ def train(cfg: dict, resume: str = "auto") -> dict:
             os.remove(old)
 
     metrics_f = open(os.path.join(run_dir, "metrics.jsonl"), "a")
-    stream = ShardStream(train_paths, cfg["batch_size"], seed=cfg["seed"], weights=tuple(cfg["blend"]), cursor=cursor)
+    stream = ShardStream(train_paths, cfg["batch_size"], seed=cfg["seed"], weights=tuple(cfg["blend"]), cursor=cursor,
+                         arch=cfg.get("arch", "n1"))
     last_ckpt = time.time()
     seen = 0
     model.train()
@@ -152,16 +160,15 @@ def train(cfg: dict, resume: str = "auto") -> dict:
             break
         for g in opt.param_groups:
             g["lr"] = lr_at(step, cfg)
-        us, them = torch.from_numpy(b["us"]).to(device), torch.from_numpy(b["them"]).to(device)
         target, esc = torch.from_numpy(b["target"]).to(device), torch.from_numpy(b["escore"]).to(device)
         with torch.autocast(device_type="cuda", enabled=use_amp):
-            out = model(us, them)
+            out = run_model(model, b, device)
             loss = loss_fn(model, out.float(), target, esc, cfg["alpha"])
         opt.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
         scaler.step(opt); scaler.update()
         model.clamp_()
-        step += 1; seen += len(us); cur = b["cursor"]
+        step += 1; seen += len(esc); cur = b["cursor"]
         rec = {"step": step, "loss": float(loss.detach()), "lr": opt.param_groups[0]["lr"], "positions": step * cfg["batch_size"]}
         if step % cfg["val_every"] == 0:
             ll, br = evaluate(model, val_paths, cfg, device)
@@ -185,7 +192,8 @@ def train(cfg: dict, resume: str = "auto") -> dict:
     return {"step": step, "run_dir": run_dir, "final": final, "stopped_by_signal": stop["flag"]}
 
 
-DEFAULTS = dict(run_id="dev", ckpt_dir="ckpt", n=256, head=1, lr=1e-3, weight_decay=0.0, batch_size=4096, steps=1000,
+DEFAULTS = dict(run_id="dev", ckpt_dir="ckpt", arch="n1", l2=16, l3=32, k=1, router="none", balance=0.01, init_from=None,
+                n=256, head=1, lr=1e-3, weight_decay=0.0, batch_size=4096, steps=1000,
                 warmup=100, seed=1, blend=[0.6, 0.25, 0.15], alpha=0.0, val_every=200, ckpt_every_s=1200,
                 ckpt_every_steps=0, deadline=None, train_glob="data/train/*.bin", val_glob=None, device=None)
 

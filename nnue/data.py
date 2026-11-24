@@ -17,6 +17,23 @@ from .targets import BLEND, blend_targets, expected_score
 PAD = 768
 MAX_PIECES = 32
 
+# N2/N3 inputs: horizontally mirrored king buckets. For perspective p with own king on ksq (seen from p, i.e. ^56 for
+# black): mirror = file(ksq) >= 4 (then every square is file-flipped, ^7); bucket = N2_BUCKETS[rank * 4 + mirrored file].
+# feature = bucket * 768 + (rel * 6 + type) * 64 + (sq_rel ^ (7 if mirror else 0)). Must match src/nnue.h.
+N2_BUCKETS = np.array([0, 1, 2, 3,
+                       4, 4, 5, 5,
+                       6, 6, 6, 6,
+                       6, 6, 6, 6,
+                       7, 7, 7, 7,
+                       7, 7, 7, 7,
+                       7, 7, 7, 7,
+                       7, 7, 7, 7], dtype=np.int64)
+N_BUCKETS = 8
+N2_PAD = N_BUCKETS * 768
+N_SCALARS = 4
+PHASE_W = np.array([0, 1, 1, 2, 4, 0], dtype=np.float32)
+MAT_W = np.array([1, 3, 3, 5, 9, 0], dtype=np.float32)
+
 
 def features(rec: np.ndarray):
     """-> idx_us, idx_them  (B, 32) int64, padded with 768."""
@@ -39,10 +56,49 @@ def features(rec: np.ndarray):
     return out[0], out[1]
 
 
-def make_batch(rec: np.ndarray, weights=BLEND):
-    us, them = features(rec)
+def features_n2(rec: np.ndarray):
+    """King-bucketed, mirrored features -> idx_us, idx_them (B, 32) int64 padded with N2_PAD; plus router scalars
+    (B, 4) float32 [phase, material balance / 10 (stm view), rule50 / 100, stm is black] and piece counts (B,)."""
+    B = len(rec)
+    rows, sqs, codes = decode_board(rec)
+    color = (codes // 6).astype(np.int64)
+    ptype = (codes % 6).astype(np.int64)
+    stm = (rec["stm_cas"] & 1).astype(np.int64)
+    ksq = np.zeros((2, B), dtype=np.int64)
+    kings = ptype == 5
+    ksq[color[kings], rows[kings]] = sqs[kings]
+    counts = np.bincount(rows, minlength=B)
+    starts = np.cumsum(counts) - counts
+    k = np.arange(len(rows)) - starts[rows]
+    out = []
+    for persp_rec in (stm, 1 - stm):
+        persp = persp_rec[rows]
+        own_k = ksq[persp, rows]
+        k_rel = np.where(persp == 1, own_k ^ 56, own_k)
+        mirror = (k_rel & 7) >= 4
+        f = np.where(mirror, 7 - (k_rel & 7), k_rel & 7)
+        bucket = N2_BUCKETS[(k_rel >> 3) * 4 + f]
+        sq = np.where(persp == 1, sqs ^ 56, sqs) ^ np.where(mirror, 7, 0)
+        rel = (color != persp).astype(np.int64)
+        feat = bucket * 768 + (rel * 6 + ptype) * 64 + sq
+        arr = np.full((B, MAX_PIECES), N2_PAD, dtype=np.int64)
+        arr[rows, k] = feat
+        out.append(arr)
+    phase = np.minimum(np.bincount(rows, weights=PHASE_W[ptype], minlength=B), 24) / 24.0
+    sign = np.where(color == stm[rows], 1.0, -1.0)
+    bal = np.bincount(rows, weights=MAT_W[ptype] * sign, minlength=B) / 10.0
+    sc = np.stack([phase, bal, rec["r50"].astype(np.float64) / 100.0, stm.astype(np.float64)], axis=1).astype(np.float32)
+    return out[0], out[1], sc, counts.astype(np.int64)
+
+
+def make_batch(rec: np.ndarray, weights=BLEND, arch: str = "n1"):
     t = blend_targets(rec, weights)
-    return {"us": us, "them": them, "target": t, "escore": expected_score(t).astype(np.float32)}
+    b = {"target": t, "escore": expected_score(t).astype(np.float32)}
+    if arch == "n1":
+        b["us"], b["them"] = features(rec)
+    else:
+        b["us"], b["them"], b["scalars"], b["pcount"] = features_n2(rec)
+    return b
 
 
 class ShardStream:
@@ -50,8 +106,9 @@ class ShardStream:
     permutation inside each shard, so (epoch, shard position, offset) is a complete data cursor.
     Records are batched within a shard; the < batch_size remainder of each shard is dropped."""
 
-    def __init__(self, paths, batch_size, seed=0, weights=BLEND, cursor=None, split=TRAIN, prefetch=4):
+    def __init__(self, paths, batch_size, seed=0, weights=BLEND, cursor=None, split=TRAIN, prefetch=4, arch="n1"):
         self.paths = sorted(paths)
+        self.arch = arch
         self.bs = batch_size
         self.seed = seed
         self.weights = weights
@@ -86,7 +143,7 @@ class ShardStream:
                         nxt = {"epoch": cur["epoch"], "shard": cur["shard"] + 1, "offset": 0}
                     else:
                         nxt = {"epoch": cur["epoch"] + 1, "shard": 0, "offset": 0}
-                    batch = make_batch(chunk, self.weights)
+                    batch = make_batch(chunk, self.weights, self.arch)
                     batch["cursor"] = nxt          # where the stream resumes after this batch
                     produced += 1
                     yield batch
