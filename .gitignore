@@ -18,3 +18,5 @@ tools/sf/
 tools/syzygy/
 /bulwark.bundle
 kaggle_outputs/
+.home/
+.tmp/

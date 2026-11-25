@@ -5,8 +5,10 @@ You are running the neural-net training for Bulwark, a C++ chess engine (this re
 data (`data/training/` with `train/`, `val/`, `test/`) is built elsewhere and copied into this folder by the user.
 Background if you need it: `README.md`, `docs/TRAINING.md`.
 
-**Everything happens inside this project folder.** Run every command below from the project root. Checkpoints go
-to `ckpt/`, nets to `nets/`, logs to `results/`. Nothing is written anywhere else.
+**Everything happens inside this project folder.** Run every command below from the project root, after
+`. scripts/local_env.sh` (once per shell): it points HOME, pip/PyTorch/CUDA caches and TMPDIR into `.home/` and `.tmp/`
+here and activates `.venv/`. Checkpoints go to `ckpt/`, nets to `nets/`, logs to `results/`. Nothing is written
+anywhere else. `scripts/gpu_queue.sh` loads `local_env.sh` by itself.
 
 ## Ground rules (shared server, other people's jobs come first)
 
@@ -23,11 +25,16 @@ to `ckpt/`, nets to `nets/`, logs to `results/`. Nothing is written anywhere els
 
 ```bash
 nvidia-smi; df -h .
-python3 -m venv .venv && . .venv/bin/activate # or reuse an existing venv
-pip install torch numpy chess pyyaml          # check: python3 -c "import torch; print(torch.cuda.is_available())"
+. scripts/local_env.sh
+python3 -m venv --without-pip .venv && . .venv/bin/activate      # no ensurepip on this server
+curl -sS https://bootstrap.pypa.io/get-pip.py | python
+pip install torch numpy chess pyyaml cmake                        # cmake from PyPI, installed into .venv
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && nice -n 19 cmake --build build -j4
-./build/run_tests tests/data | tail -1                                 # expect "0 failures"
+./build/run_tests tests/data | tail -1                            # expect "0 failures"
+python3 -c "import torch; print(torch.cuda.is_available())"       # expect True
 ```
+If the training log shows an error about semaphores or `/dev/shm` (the data-loading processes need it), run the
+queue with `LOADER_WORKERS=0`: slower, otherwise identical.
 
 ## 2. Wait for the data
 

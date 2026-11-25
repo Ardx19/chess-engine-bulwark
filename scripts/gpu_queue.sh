@@ -21,6 +21,7 @@
 #   * WAIT_FREE_GB (default 4): before each run, wait until the chosen GPU has this much free memory.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. scripts/local_env.sh          # caches, temp files and the venv all stay inside this folder
 
 DATA=${DATA:-data/training}                     # train/ val/ test/ from pipeline.make_training
 [ -z "${PILOT:-}" ] && [ -d data/pilot_training ] && PILOT=data/pilot_training
