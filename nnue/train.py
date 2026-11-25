@@ -55,7 +55,7 @@ def atomic_save(obj, path: str):
 
 
 def find_resume(run_dir: str, run_id: str):
-    cands = [run_dir] + sorted(glob.glob(f"/kaggle/input/*/ckpt/run-{run_id}"))
+    cands = [run_dir] + sorted(glob.glob(f"/kaggle/input/**/ckpt/run-{run_id}", recursive=True))   # any mount depth
     repo = os.environ.get("HF_REPO")
     if repo:
         try:
@@ -141,6 +141,9 @@ def train(cfg: dict, resume: str = "auto") -> dict:
     stop = {"flag": False}
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("flag", True))
     deadline = parse_duration(cfg["deadline"]) if cfg.get("deadline") else None
+    # TRAIN_STOP_AT (epoch seconds, run control): stop with a checkpoint at a fixed clock time, e.g. before a
+    # Kaggle session ends; rerunning resumes from that checkpoint.
+    stop_at = float(os.environ["TRAIN_STOP_AT"]) if os.environ.get("TRAIN_STOP_AT") else None
     t_start = time.time()
     wall = lambda: wall_used + (time.time() - t_start)    # noqa: E731
 
@@ -161,7 +164,8 @@ def train(cfg: dict, resume: str = "auto") -> dict:
     model.train()
     cur = cursor
     for b in stream:
-        if step >= cfg["steps"] or (cfg.get("stop_after") and step >= cfg["stop_after"]) or stop["flag"] or (deadline and wall() >= deadline):
+        if step >= cfg["steps"] or (cfg.get("stop_after") and step >= cfg["stop_after"]) or stop["flag"] or (deadline and wall() >= deadline) \
+                or (stop_at and time.time() >= stop_at):
             break
         for g in opt.param_groups:
             g["lr"] = lr_at(step, cfg)
@@ -194,7 +198,8 @@ def train(cfg: dict, resume: str = "auto") -> dict:
             HfApi().upload_folder(folder_path=run_dir, path_in_repo=f"ckpt/run-{cfg['run_id']}", repo_id=os.environ["HF_REPO"])
         except Exception as e:      # noqa: BLE001
             print("HF upload failed:", e)
-    return {"step": step, "run_dir": run_dir, "final": final, "stopped_by_signal": stop["flag"]}
+    return {"step": step, "run_dir": run_dir, "final": final, "stopped_by_signal": stop["flag"],
+            "complete": step >= cfg["steps"]}
 
 
 DEFAULTS = dict(run_id="dev", ckpt_dir="ckpt", loader_workers=0, arch="n1", l2=16, l3=32, k=1, router="none", balance=0.01, init_from=None,
