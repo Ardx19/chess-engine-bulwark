@@ -155,7 +155,7 @@ def train(cfg: dict, resume: str = "auto") -> dict:
 
     metrics_f = open(os.path.join(run_dir, "metrics.jsonl"), "a")
     stream = ShardStream(train_paths, cfg["batch_size"], seed=cfg["seed"], weights=tuple(cfg["blend"]), cursor=cursor,
-                         arch=cfg.get("arch", "n1"))
+                         arch=cfg.get("arch", "n1"), workers=cfg.get("loader_workers") or 0)
     last_ckpt = time.time()
     seen = 0
     model.train()
@@ -197,7 +197,7 @@ def train(cfg: dict, resume: str = "auto") -> dict:
     return {"step": step, "run_dir": run_dir, "final": final, "stopped_by_signal": stop["flag"]}
 
 
-DEFAULTS = dict(run_id="dev", ckpt_dir="ckpt", arch="n1", l2=16, l3=32, k=1, router="none", balance=0.01, init_from=None,
+DEFAULTS = dict(run_id="dev", ckpt_dir="ckpt", loader_workers=0, arch="n1", l2=16, l3=32, k=1, router="none", balance=0.01, init_from=None,
                 n=256, head=1, lr=1e-3, weight_decay=0.0, batch_size=4096, steps=1000,
                 warmup=100, seed=1, blend=[0.6, 0.25, 0.15], alpha=0.0, val_every=200, ckpt_every_s=1200,
                 ckpt_every_steps=0, deadline=None, train_glob="data/train/*.bin", val_glob=None, device=None)

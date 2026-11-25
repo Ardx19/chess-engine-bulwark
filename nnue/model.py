@@ -165,7 +165,8 @@ def build_model(cfg: dict) -> nn.Module:
 
 def run_model(model: nn.Module, batch: dict, device):
     """Forward a loader batch (numpy) through either architecture."""
-    us, them = torch.from_numpy(batch["us"]).to(device), torch.from_numpy(batch["them"]).to(device)
+    # .long(): multi-process loaders ship int16 indices
+    us, them = torch.from_numpy(batch["us"]).to(device).long(), torch.from_numpy(batch["them"]).to(device).long()
     if isinstance(model, NNUE2):
         return model(us, them, torch.from_numpy(batch["scalars"]).to(device), torch.from_numpy(batch["pcount"]).to(device))
     return model(us, them)

@@ -6,6 +6,9 @@ Feature index (must match the C++ engine): for perspective p and a piece of colo
 """
 from __future__ import annotations
 
+import collections
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing as mp
 import queue
 import threading
 
@@ -101,14 +104,42 @@ def make_batch(rec: np.ndarray, weights=BLEND, arch: str = "n1"):
     return b
 
 
+# ---- multi-process loading: workers build batches; the main process keeps them in the exact single-process order ----
+_WCACHE: dict = {}
+
+
+def _shard_permuted(path, epoch, sid, seed, split):
+    """(records, permutation) of one shard for one epoch, cached per worker process."""
+    key = (path, epoch, sid, seed, split)
+    if _WCACHE.get("key") != key:
+        rec = read_shard(path)
+        if split is not None and "gid" in rec.dtype.names:
+            rec = rec[split_of(rec["gid"]) == split]
+        _WCACHE.update(key=key, rec=rec, perm=np.random.default_rng([seed, epoch, sid]).permutation(len(rec)))
+    return _WCACHE["rec"], _WCACHE["perm"]
+
+
+def _batch_job(job):
+    path, epoch, sid, b, bs, seed, split, weights, arch, nxt = job
+    rec, perm = _shard_permuted(path, epoch, sid, seed, split)
+    batch = make_batch(rec[perm[b * bs:(b + 1) * bs]], weights, arch)
+    batch["us"] = batch["us"].astype(np.int16)        # feature indices < 32768: 4x less to pass between processes
+    batch["them"] = batch["them"].astype(np.int16)
+    batch["cursor"] = nxt
+    return batch
+
+
 class ShardStream:
     """Iterates batches over training shards. The seed fixes the shard permutation per epoch and the record
     permutation inside each shard, so (epoch, shard position, offset) is a complete data cursor.
     Records are batched within a shard; the < batch_size remainder of each shard is dropped."""
 
-    def __init__(self, paths, batch_size, seed=0, weights=BLEND, cursor=None, split=TRAIN, prefetch=4, arch="n1"):
+    def __init__(self, paths, batch_size, seed=0, weights=BLEND, cursor=None, split=TRAIN, prefetch=4, arch="n1",
+                 workers=0):
         self.paths = sorted(paths)
         self.arch = arch
+        self.workers = workers          # > 0: build batches in this many processes (same batches, same order)
+        self._counts = {}
         self.bs = batch_size
         self.seed = seed
         self.weights = weights
@@ -152,7 +183,54 @@ class ShardStream:
                 raise RuntimeError("no batches: shards smaller than the batch size, or all records in other splits")
             cur = {"epoch": cur["epoch"] + 1, "shard": 0, "offset": 0}
 
+    def _count(self, path):
+        if path not in self._counts:
+            rec = read_shard(path, mmap=True)
+            if self.split is not None and "gid" in rec.dtype.names:
+                self._counts[path] = int((split_of(np.asarray(rec["gid"])) == self.split).sum())
+            else:
+                self._counts[path] = len(rec)
+        return self._counts[path]
+
+    def _jobs(self):
+        """The same sequence as _generate, as work items for the loader processes."""
+        cur = dict(self.cursor)
+        while True:
+            order = self._shard_order(cur["epoch"])
+            produced = 0
+            while cur["shard"] < len(order):
+                sid = int(order[cur["shard"]])
+                nb = self._count(self.paths[sid]) // self.bs
+                for b in range(cur["offset"] // self.bs, nb):
+                    if b + 1 < nb:
+                        nxt = {"epoch": cur["epoch"], "shard": cur["shard"], "offset": (b + 1) * self.bs}
+                    elif cur["shard"] + 1 < len(order):
+                        nxt = {"epoch": cur["epoch"], "shard": cur["shard"] + 1, "offset": 0}
+                    else:
+                        nxt = {"epoch": cur["epoch"] + 1, "shard": 0, "offset": 0}
+                    produced += 1
+                    yield (self.paths[sid], cur["epoch"], sid, b, self.bs, self.seed, self.split, self.weights, self.arch, nxt)
+                cur = {"epoch": cur["epoch"], "shard": cur["shard"] + 1, "offset": 0}
+            if produced == 0 and cur["epoch"] == self.cursor["epoch"]:
+                raise RuntimeError("no batches: shards smaller than the batch size, or all records in other splits")
+            cur = {"epoch": cur["epoch"] + 1, "shard": 0, "offset": 0}
+
+    def _iter_workers(self):
+        jobs = self._jobs()
+        ex = ProcessPoolExecutor(self.workers, mp_context=mp.get_context("spawn"))
+        pending = collections.deque()
+        try:
+            while True:
+                while len(pending) < 3 * self.workers:
+                    pending.append(ex.submit(_batch_job, next(jobs)))
+                yield pending.popleft().result()
+        finally:                                    # never block on shutdown (end of training, errors)
+            ex.shutdown(wait=False, cancel_futures=True)
+
     def __iter__(self):
+        if self.workers > 0:
+            yield from self._iter_workers()
+            return
         if self.prefetch <= 0:
             yield from self._generate()
             return

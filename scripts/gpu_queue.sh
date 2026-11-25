@@ -11,7 +11,8 @@
 # can be killed at any time (kill -TERM the trainer: it checkpoints first) and restarted with the same command.
 #
 # Low priority:
-#   * CPU: nice 19 and idle I/O class; TORCH_THREADS (default 4) caps PyTorch's CPU threads.
+#   * CPU: nice 19 and idle I/O class; TORCH_THREADS (default 4) caps PyTorch's CPU threads; LOADER_WORKERS
+#     (default 8) data-loading processes feed the GPU. Total about 12 CPU threads while a run is active.
 #   * GPU: CUDA has no process priority, so the queue stays polite instead: one GPU, one run at a time, at most
 #     GPU_MEM_FRACTION of its memory (default 0.08, about 3.8 GB of an L40S; the nets need under 2 GB).
 #     GPU picks the device; unset, it takes the GPU with the most free memory. Under a job scheduler, submit this
@@ -28,6 +29,7 @@ NETS=${NETS:-nets}
 LOGS=${LOGS:-results/gpu_queue}
 RUNS=${RUNS:-sanity n1 n1wdl n2 n3count n3learned}
 BATCH=${BATCH:-16384}
+LOADER_WORKERS=${LOADER_WORKERS:-8}            # data-loading processes per run (the GPU is otherwise starved)
 export GPU_MEM_FRACTION=${GPU_MEM_FRACTION:-0.08}
 export TORCH_THREADS=${TORCH_THREADS:-4}
 export OMP_NUM_THREADS=$TORCH_THREADS MKL_NUM_THREADS=$TORCH_THREADS
@@ -41,7 +43,7 @@ if have_gpu && [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then
   GPU=${GPU:-$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits | sort -t, -k2 -nr | head -1 | cut -d, -f1)}
   export CUDA_VISIBLE_DEVICES=$GPU
 fi
-log "queue start: runs [$RUNS], GPU ${CUDA_VISIBLE_DEVICES:-none (CPU)}, mem fraction $GPU_MEM_FRACTION, threads $TORCH_THREADS"
+log "queue start: runs [$RUNS], GPU ${CUDA_VISIBLE_DEVICES:-none (CPU)}, mem fraction $GPU_MEM_FRACTION, threads $TORCH_THREADS, loader workers $LOADER_WORKERS"
 
 wait_for_gpu() {
   have_gpu || return 0
@@ -81,7 +83,7 @@ for run in $RUNS; do
   log "start $run"
   # shellcheck disable=SC2046
   "${LOW[@]}" python3 -m nnue.train --run-id "$run" --ckpt-dir "$CKPT" --batch-size "$BATCH" --lr 0.001 --warmup 1000 \
-      --val-every 2000 --train-glob "$root/train/*.bin" --val-glob "$root/val/*.bin" --resume auto \
+      --val-every 2000 --loader-workers "$LOADER_WORKERS" --train-glob "$root/train/*.bin" --val-glob "$root/val/*.bin" --resume auto \
       $(args_for "$run") > "$LOGS/$run.log" 2>&1 || { log "FAILED $run (see $LOGS/$run.log)"; exit 1; }
   if grep -q '"stopped_by_signal": true' "$LOGS/$run.log"; then log "stopped $run by signal; rerun to resume"; exit 0; fi
   ref=$(ls "$root"/val/*.bin | head -1)
