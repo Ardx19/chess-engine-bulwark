@@ -52,6 +52,7 @@ struct Options {
     bool d2_defense = false;       // D2 (DefenseMode): d = DefenseDrawValue when the last root P(loss) >= threshold
     int defense_draw_value = 650;  // per mille
     int defense_loss_threshold = 400;   // per mille
+    int wdl_scale = 100;           // WDLScale: percent applied to WDL-net utilities (and the draw score) on the search scale
     bool d6_perpetual = false;     // D6: quiet checks at the first qsearch ply when far below alpha
     bool d7_fortress = false;      // D7: flat large score + no zeroing move in the PV -> scale toward the draw
     bool show_wdl = false;         // UCI_ShowWDL (WDL nets: net W/D/L at the end of the PV)

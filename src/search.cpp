@@ -45,7 +45,7 @@ constexpr int EVAL_CAP = 10000;   // static evals stay well inside the mate / ta
 int Searcher::utility_units(const double* p, Color stm) const {
     double d = stm == root_stm_ ? d_ : 1.0 - d_;          // opponent nodes weight draws by 1 - d (negamax-consistent)
     double u = std::clamp(p[0] + d * p[1], 1e-6, 1.0 - 1e-6);
-    return int(std::lround(400.0 * std::log(u / (1.0 - u))));
+    return int(std::lround(4.0 * opt.wdl_scale * std::log(u / (1.0 - u))));
 }
 
 int Searcher::evaluate(int ply) {
@@ -468,9 +468,9 @@ Move Searcher::think(const Position& root, const std::vector<U64>& history, cons
         if (p_loss * 1000.0 >= opt.defense_loss_threshold) d = opt.defense_draw_value / 1000.0;
     }
     d_ = std::clamp(d, 0.001, 0.999);
-    draw_us_ = int(std::lround(400.0 * std::log(d_ / (1.0 - d_))));
+    draw_us_ = int(std::lround(4.0 * opt.wdl_scale * std::log(d_ / (1.0 - d_))));
     int dm = int(std::lround(d_ * 1000));
-    uint64_t tag = net_gen_ * 4096 + uint64_t(dm) * 2 + (dm != 500 ? uint64_t(root.stm) : 0);
+    uint64_t tag = (net_gen_ * 4096 + uint64_t(dm) * 2 + (dm != 500 ? uint64_t(root.stm) : 0)) * 1024 + uint64_t(opt.wdl_scale);
     if (tag != util_tag_) { if (util_tag_ != ~0ULL) tt.clear(); util_tag_ = tag; }
     if (net_ && net_->quantized) NNUE::refresh(*net_, root, acc_[0], finny_.get());
     else acc_[0].computed = true;

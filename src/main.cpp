@@ -111,6 +111,7 @@ struct Engine {
         else if (name == "EvalFile") load_net(value);
         else if (name == "DrawValue") searcher.opt.draw_value = std::clamp(std::stoi(value), 0, 1000);
         else if (name == "DefenseDrawValue") searcher.opt.defense_draw_value = std::clamp(std::stoi(value), 0, 1000);
+        else if (name == "WDLScale") searcher.opt.wdl_scale = std::clamp(std::stoi(value), 10, 400);
         else if (name == "DefenseLossThreshold") searcher.opt.defense_loss_threshold = std::clamp(std::stoi(value), 0, 1000);
         else if (bool* f = searcher.opt.flag(name)) *f = value == "true";
         // Threads is fixed at 1 (accepted and ignored).
@@ -136,6 +137,7 @@ struct Engine {
                 std::puts("option name DrawValue type spin default 500 min 0 max 1000");
                 std::puts("option name DefenseDrawValue type spin default 650 min 0 max 1000");
                 std::puts("option name DefenseLossThreshold type spin default 400 min 0 max 1000");
+                std::puts("option name WDLScale type spin default 100 min 10 max 400");
                 std::puts("option name SyzygyPath type string default <empty>");
                 std::puts("option name EvalFile type string default <empty>");
                 std::puts("uciok");
