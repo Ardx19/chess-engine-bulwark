@@ -83,7 +83,7 @@ def lr_at(step, cfg):
 
 def evaluate(model, val_paths, cfg, device, max_batches=20):
     stream = ShardStream(val_paths, cfg["batch_size"], seed=1234, weights=tuple(cfg["blend"]), split=VAL, prefetch=0,
-                         arch=cfg.get("arch", "n1"))
+                         arch="n1" if cfg.get("arch", "n1") == "n1" else "n2")
     tot_ll = tot_br = 0.0
     n = 0
     model.eval()
@@ -160,7 +160,7 @@ def train(cfg: dict, resume: str = "auto") -> dict:
 
     metrics_f = open(os.path.join(run_dir, "metrics.jsonl"), "a")
     stream = ShardStream(train_paths, cfg["batch_size"], seed=cfg["seed"], weights=tuple(cfg["blend"]), cursor=cursor,
-                         arch=cfg.get("arch", "n1"), workers=cfg.get("loader_workers") or 0)
+                         arch="n1" if cfg.get("arch", "n1") == "n1" else "n2", workers=cfg.get("loader_workers") or 0)
     last_ckpt = time.time()
     seen = 0
     model.train()

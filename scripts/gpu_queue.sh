@@ -68,6 +68,9 @@ args_for() {   # run name -> trainer arguments (positions seen = steps x BATCH)
     n1wdl)     echo "--arch n1 --n 256 --head 3 --alpha 0.1 --steps $(S 60000)" ;;        # ~1.0B
     n1dual)    echo "--arch n1 --n 256 --head 4 --wdl-detach 1 --steps $(S 60000)" ;;    # scalar trained as N1 + W/D/L read-out
     n1dual_joint) echo "--arch n1 --n 256 --head 4 --wdl-weight 0.25 --steps $(S 60000)" ;;  # both heads shape the trunk
+    # Phase 3, on the 1.5B Lc0-label dataset (DATA=data/training_lc0): 8 king buckets x 768 -> L1, 8 output buckets
+    n4)        echo "--arch n4 --n 1024 --head 4 --wdl-weight 0.25 --lr 0.0005 --warmup 2000 --val-every 5000 --steps $(S 300000)" ;;  # ~4.9B samples
+    n4w)       echo "--arch n4 --n 1536 --head 4 --wdl-weight 0.25 --lr 0.0005 --warmup 2000 --val-every 5000 --steps $(S 300000)" ;;
     n2)        echo "--arch n2 --n 512 --head 3 --alpha 0.1 --steps $(S 110000)" ;;       # ~1.8B
     n3count)   echo "--arch n3 --n 512 --head 3 --alpha 0.1 --k 8 --router count --steps $(S 45000) --init-from $CKPT/run-n2/final.pt" ;;      # ~0.74B
     n3learned) echo "--arch n3 --n 512 --head 3 --alpha 0.1 --k 8 --router learned --balance 0.01 --steps $(S 45000) --init-from $CKPT/run-n2/final.pt" ;;

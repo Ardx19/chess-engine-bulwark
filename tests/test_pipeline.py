@@ -300,6 +300,31 @@ class Training(unittest.TestCase):
             self.assertLess(errs["float"], 1e-4, name)
             self.assertLess(errs["quantized"], 0.15, f"{name}: {errs}")
 
+    def test_n4_train_export_parity(self):
+        """N4 (king buckets + output buckets, dual and scalar heads): trains, exports format v3, and the engine
+        reproduces it (float < 1e-4; quantised close)."""
+        import subprocess
+        from nnue.train import train
+        from nnue.export import export_net, load_checkpoint_model, write_reference
+        exe = os.path.join(ROOT, "build", "bulwark")
+        val = glob.glob(os.path.join(self.tmp, "val", "*.bin"))[0]
+        for name, head in (("n4dual", 4), ("n4s", 1)):
+            r = train(self.cfg(name, arch="n4", head=head, n=32, steps=30, lr=3e-3, wdl_weight=0.25), resume="none")
+            m = load_checkpoint_model(r["final"])
+            self.assertEqual((type(m).__name__, m.head, m.ob), ("NNUE4", head, 8))
+            info = export_net(m, os.path.join(self.tmp, f"nets_{name}"))
+            ref = os.path.join(self.tmp, f"ref_{name}.jsonl")
+            write_reference(m, val, ref, 300)
+            if not os.path.exists(exe):
+                continue
+            errs = {}
+            for kind in ("float", "quantized"):
+                res = subprocess.run([exe], input=f"verifynet {info[kind]} {ref}\nquit\n", capture_output=True, text=True).stdout
+                line = [l for l in res.splitlines() if l.startswith("verifynet")][0]
+                errs[kind] = float(line.split("max abs error ")[1].split(",")[0])
+            self.assertLess(errs["float"], 1e-4, name)
+            self.assertLess(errs["quantized"], 0.15, f"{name}: {errs}")
+
     def test_upcycled_experts_start_equal_to_dense(self):
         import torch
         from nnue.model import NNUE2

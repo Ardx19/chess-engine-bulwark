@@ -1,5 +1,6 @@
 #pragma once
 #include "position.h"
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -7,6 +8,8 @@
 // Net inference. File formats are written by nnue/export.py:
 //   version 1: N1 / N1-WDL (arch 1 / 2): 768 -> L1 per perspective, SCReLU, concat -> head (1 scalar, 3 W/D/L logits,
 //              or 4 = dual head [expected-score logit, W, D, L]).
+//   version 3: N4 (arch 5): the v2 king-bucket inputs -> L1, SCReLU, concat -> one linear head per output bucket
+//              (piece count), quantised exactly like v1 (int16 output weights, QB = 64).
 //   version 2: N2 / N3 (arch 3 / 4): 8 mirrored king buckets x 768 -> L1, SCReLU, concat -> K expert stacks
 //              (2*L1 -> L2 -> L3 -> head) chosen by no router (K = 1), piece count, or a learned top-1 router.
 // ".nnuef" is float32 (parity with PyTorch), ".nnue" quantised: L1 int16 (QA = 255); v1 output int16 (QB = 64);
@@ -20,7 +23,7 @@ namespace NNUE {
 
 constexpr int FEATURES = 768;
 constexpr int QA = 255, QB = 64;
-constexpr int MAX_L1 = 1024;
+constexpr int MAX_L1 = 2048;
 constexpr int N_BUCKETS = 8;
 constexpr int N_LAYOUTS = 2 * N_BUCKETS;   // bucket x mirrored
 constexpr int N_SCALARS = 4;
@@ -30,6 +33,7 @@ enum Router { ROUTER_NONE = 0, ROUTER_COUNT = 1, ROUTER_LEARNED = 2 };
 struct Net {
     int version = 1, arch = 0, l1 = 0, heads = 0;
     int l2 = 0, l3 = 0, experts = 1, router = ROUTER_NONE;   // version 2
+    int out_buckets = 1;                                       // version 3: output heads selected by piece count
     bool quantized = false;
     bool fast_out = false;                                     // v1: |out_w| * QA fits int16 (SIMD v*w trick is exact)
     // float (.nnuef)
@@ -48,7 +52,10 @@ struct Net {
     void finalize();      // derived flags after the weights are filled in (load calls it; tests that build nets too)
     bool wdl() const { return heads == 3 || heads == 4; }      // has W/D/L outputs
     bool dual() const { return heads == 4; }                  // scalar search head + W/D/L head
-    int inputs() const { return version == 2 ? N_BUCKETS * FEATURES : FEATURES; }
+    int inputs() const { return version >= 2 ? N_BUCKETS * FEATURES : FEATURES; }
+    int out_bucket(const Position& pos) const {
+        return std::min((popcount(pos.pieces()) - 1) * out_buckets / 32, out_buckets - 1);
+    }
     // Raw head outputs (logits), side to move's view: 1 (scalar), 3 (W, D, L) or 4 (scalar, W, D, L).
     void forward(const Position& pos, float* out) const;
 };

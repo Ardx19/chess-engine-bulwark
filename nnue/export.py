@@ -26,7 +26,7 @@ import torch
 
 from pipeline.records import TRAIN_DTYPE, read_shard, to_fen
 from .data import PAD, make_batch
-from .model import NNUE, NNUE2, run_model
+from .model import NNUE, NNUE2, NNUE4, run_model
 
 QA, QB = 255, 64
 
@@ -77,7 +77,32 @@ def export_net_v2(model: NNUE2, out_dir: str) -> dict:
     return _write_pair(out_dir, qbody, fbody)
 
 
+def export_net_v3(model: NNUE4, out_dir: str) -> dict:
+    """Version 3 (N4, arch 5): magic | u32 version=3 | arch=5 | L1 | buckets=8 | heads | out_buckets |
+    i16 ft_w[8*768][L1] | i16 ft_b[L1] | i16 out_w[out_buckets][heads][2*L1] (QB) | i32 out_b[out_buckets][heads]
+    (QA*QA*QB) | sha256. Heads are ordered [scalar] + [W, D, L] as present. Float file: same layout, f32."""
+    from .data import N2_PAD
+    f32 = lambda t: t.detach().cpu().float().numpy()        # noqa: E731
+    ft_w, ft_b = f32(model.ft.weight)[:N2_PAD], f32(model.ft_bias)
+    ws, bs = [], []
+    if model.head in (1, 4):
+        ws.append(f32(model.out_es.weight).reshape(model.ob, 1, -1)); bs.append(f32(model.out_es.bias).reshape(model.ob, 1))
+    if model.head in (3, 4):
+        ws.append(f32(model.out.weight).reshape(model.ob, 3, -1)); bs.append(f32(model.out.bias).reshape(model.ob, 3))
+    out_w, out_b = np.concatenate(ws, axis=1), np.concatenate(bs, axis=1)      # (ob, heads, 2N), (ob, heads)
+    hdr = lambda magic: magic + struct.pack("<6I", 3, 5, model.n, 8, model.head, model.ob)   # noqa: E731
+    q16 = lambda a, s: np.clip(np.round(a * s), -32768, 32767).astype("<i2")                 # noqa: E731
+    qbody = (hdr(b"NNUEWDL1") + q16(ft_w, QA).tobytes() + q16(ft_b, QA).tobytes() + q16(out_w, QB).tobytes()
+             + np.round(out_b * QA * QA * QB).astype("<i4").tobytes())
+    fbody = (hdr(b"NNUEFLT1") + ft_w.astype("<f4").tobytes() + ft_b.astype("<f4").tobytes()
+             + out_w.astype("<f4").tobytes() + out_b.astype("<f4").tobytes())
+    os.makedirs(out_dir, exist_ok=True)
+    return _write_pair(out_dir, qbody, fbody)
+
+
 def export_net(model, out_dir: str) -> dict:
+    if isinstance(model, NNUE4):
+        return export_net_v3(model, out_dir)
     if isinstance(model, NNUE2):
         return export_net_v2(model, out_dir)
     os.makedirs(out_dir, exist_ok=True)
@@ -107,7 +132,7 @@ def write_reference(model: NNUE, shard_path: str, out_path: str, n: int = 10000)
     """Float model outputs (logits) on the first n positions of a training/master shard, one JSON line each."""
     rec = read_shard(shard_path)[:n]
     model.eval()
-    batch = make_batch(rec, arch="n2" if isinstance(model, NNUE2) else "n1")
+    batch = make_batch(rec, arch="n1" if isinstance(model, NNUE) else "n2")
     out = run_model(model, batch, "cpu").float().numpy().reshape(len(rec), -1)
     with open(out_path, "w") as f:
         for i in range(len(rec)):
@@ -119,6 +144,13 @@ def load_checkpoint_model(path: str):
     cfg = ck.get("cfg") or {}
     state = ck["model"]
     n = state["ft_bias"].shape[0]
+    from .data import N2_PAD
+    if "l3_w" not in state and state["ft.weight"].shape[0] == N2_PAD + 1:     # N4
+        head = (1 if "out_es.weight" in state else 0) + (3 if "out.weight" in state else 0)
+        ob = (state["out_es.weight"] if "out_es.weight" in state else state["out.weight"]).shape[0] // (1 if "out_es.weight" in state else 3)
+        m = NNUE4(n, head, bool(cfg.get("wdl_detach") or 0), cfg.get("wdl_weight") or 1.0, ob)
+        m.load_state_dict(state)
+        return m
     if "l3_w" in state:
         k, l3, l2 = state["l3_w"].shape
         router = "learned" if "router_x.weight" in state else ("count" if k > 1 else "none")

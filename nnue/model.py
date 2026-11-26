@@ -177,10 +177,66 @@ class NNUE2(nn.Module):
             self.out_w[e].copy_(dense.out_w[0]); self.out_b[e].copy_(dense.out_b[0])
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# N4: 8 mirrored king buckets x 768 -> N (shared by both perspectives), SCReLU, concat(us, them) -> 8 output buckets
+# selected by piece count ((pieces - 1) * 8 // 32), each a linear head: 1 scalar, 3 W/D/L, or 4 = dual
+# [expected-score logit, W, D, L] (wdl_detach / wdl_weight as in N1). No hidden layers, so the engine's quantised
+# path is the exact int16 one used by N1 (export format v3).
+
+N_OUT_BUCKETS = 8
+
+
+class NNUE4(nn.Module):
+    def __init__(self, n: int = 1536, head: int = 4, wdl_detach: bool = False, wdl_weight: float = 1.0,
+                 out_buckets: int = N_OUT_BUCKETS):
+        super().__init__()
+        assert head in (1, 3, 4)
+        self.n, self.head, self.ob = n, head, out_buckets
+        self.wdl_detach, self.wdl_weight = bool(wdl_detach), float(wdl_weight)
+        self.ft = nn.EmbeddingBag(N2_PAD + 1, n, mode="sum", padding_idx=N2_PAD)
+        self.ft_bias = nn.Parameter(torch.zeros(n))
+        if head in (1, 4):
+            self.out_es = nn.Linear(2 * n, out_buckets)
+        if head in (3, 4):
+            self.out = nn.Linear(2 * n, out_buckets * 3)
+        nn.init.normal_(self.ft.weight, std=0.05)
+        with torch.no_grad():
+            self.ft.weight[N2_PAD].zero_()
+        self.aux_loss = torch.zeros(())
+
+    def bucket(self, pcount):
+        return torch.clamp((pcount - 1) * self.ob // 32, 0, self.ob - 1)
+
+    def forward(self, us, them, scalars=None, pcount=None):
+        a = self.ft(us) + self.ft_bias
+        b = self.ft(them) + self.ft_bias
+        x = torch.cat([NNUE.screlu(a), NNUE.screlu(b)], dim=1)
+        ar = torch.arange(len(x), device=x.device)
+        k = self.bucket(pcount)
+        outs = []
+        if self.head in (1, 4):
+            outs.append(self.out_es(x)[ar, k].unsqueeze(1))
+        if self.head in (3, 4):
+            xw = x.detach() if (self.head == 4 and self.wdl_detach) else x
+            outs.append(self.out(xw).view(len(x), self.ob, 3)[ar, k])
+        o = torch.cat(outs, dim=1)
+        return o.squeeze(1) if self.head == 1 else o
+
+    @torch.no_grad()
+    def clamp_(self):
+        self.ft.weight.clamp_(-WEIGHT_CLAMP, WEIGHT_CLAMP)
+        self.ft.weight[N2_PAD].zero_()
+        for layer in ("out_es", "out"):
+            if hasattr(self, layer):
+                getattr(self, layer).weight.clamp_(-WEIGHT_CLAMP, WEIGHT_CLAMP)
+
+
 def build_model(cfg: dict) -> nn.Module:
     arch = cfg.get("arch", "n1")
     if arch == "n1":
         return NNUE(cfg["n"], cfg["head"], bool(cfg.get("wdl_detach") or 0), cfg.get("wdl_weight") or 1.0)
+    if arch == "n4":
+        return NNUE4(cfg["n"], cfg["head"], bool(cfg.get("wdl_detach") or 0), cfg.get("wdl_weight") or 1.0)
     return NNUE2(cfg["n"], cfg["head"], cfg.get("l2", 16), cfg.get("l3", 32), cfg.get("k", 1),
                  cfg.get("router", "none"), cfg.get("balance", 0.01))
 
@@ -189,6 +245,6 @@ def run_model(model: nn.Module, batch: dict, device):
     """Forward a loader batch (numpy) through either architecture."""
     # .long(): multi-process loaders ship int16 indices
     us, them = torch.from_numpy(batch["us"]).to(device).long(), torch.from_numpy(batch["them"]).to(device).long()
-    if isinstance(model, NNUE2):
+    if isinstance(model, (NNUE2, NNUE4)):
         return model(us, them, torch.from_numpy(batch["scalars"]).to(device), torch.from_numpy(batch["pcount"]).to(device))
     return model(us, them)

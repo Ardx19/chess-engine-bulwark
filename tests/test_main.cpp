@@ -223,6 +223,22 @@ static NNUE::Net random_net_v2(int l1, int heads, int k, int router, unsigned se
     return n;
 }
 
+// Random quantised v3 net (N4: king buckets, output buckets by piece count, 1/3/4 heads, exact int16 output).
+static NNUE::Net random_net_v3(int l1, int heads, int ob, unsigned seed) {
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int> fw(-300, 300), fb(0, 200), ow(-120, 120);
+    NNUE::Net n;
+    n.version = 3; n.l1 = l1; n.heads = heads; n.arch = 5; n.quantized = true; n.out_buckets = ob;
+    n.q_ft_w.resize(size_t(NNUE::N_BUCKETS) * NNUE::FEATURES * l1); n.q_ft_b.resize(l1);
+    n.q_out_w.resize(size_t(ob) * heads * 2 * l1); n.q_out_b.resize(size_t(ob) * heads);
+    for (auto& w : n.q_ft_w) w = int16_t(fw(rng));
+    for (auto& b : n.q_ft_b) b = int16_t(fb(rng));
+    for (auto& w : n.q_out_w) w = int16_t(ow(rng));
+    for (auto& b : n.q_out_b) b = int32_t(fw(rng)) * 1000;
+    n.finalize();
+    return n;
+}
+
 // Incremental accumulators (diffed along every perft path) and the SIMD output must equal the scalar full refresh
 // exactly: everything is integer arithmetic.
 static int nnue_walk(const NNUE::Net& net, const Position& p, const NNUE::Accumulator& acc, int d, NNUE::Finny* finny = nullptr) {
@@ -284,6 +300,27 @@ static void test_nnue() {
             bad += nnue_walk(net, p, *acc, 2, finny.get());
         }
         CHECK(bad == 0, "nnue v2 incremental/simd mismatches (router %d): %d", router, bad);
+    }
+    for (int heads : {1, 4}) {   // v3 (N4): king buckets + Finny refresh, output bucket per piece count, SIMD == scalar
+        NNUE::Net net = random_net_v3(64, heads, 8, 77 + heads);
+        CHECK(net.fast_out, "v3 fast_out");
+        auto finny = std::make_unique<NNUE::Finny>();
+        int bad = 0;
+        for (const char* f : kfens) {
+            Position p; p.set_fen(f);
+            auto acc = std::make_unique<NNUE::Accumulator>();
+            NNUE::refresh(net, p, *acc);
+            bad += nnue_walk(net, p, *acc, 2);
+            NNUE::refresh(net, p, *acc, finny.get());
+            bad += nnue_walk(net, p, *acc, 2, finny.get());
+        }
+        CHECK(bad == 0, "nnue v3 incremental/simd mismatches (heads %d): %d", heads, bad);
+        Position a, b;   // file mirror gives the same output
+        a.set_fen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1");
+        b.set_fen("8/5p2/4p3/r5PK/k1p3R1/8/1P1P4/8 w - - 0 1");
+        float oa[NNUE::MAX_HEADS], ob[NNUE::MAX_HEADS];
+        net.forward(a, oa); net.forward(b, ob);
+        CHECK(oa[0] == ob[0], "v3 mirror symmetry");
     }
     {   // mirrored king layout: a position and its file-mirror give the same output (no castling rights).
         NNUE::Net net = random_net_v2(64, 3, 1, 0, 5);

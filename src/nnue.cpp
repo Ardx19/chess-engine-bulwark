@@ -67,6 +67,16 @@ bool Net::load_bytes(const char* data, size_t size, const std::string& name, std
             if (quantized) vec(q_r_w, size_t(experts) * 2 * l1); else vec(f_r_w, size_t(experts) * 2 * l1);
             vec(r_s, size_t(experts) * N_SCALARS); vec(r_b, experts);
         }
+    } else if (ver == 3) {
+        uint32_t h[5];
+        take(h, 20);
+        arch = int(h[0]); l1 = int(h[1]); heads = int(h[3]); out_buckets = int(h[4]);
+        if (h[2] != N_BUCKETS || l1 <= 0 || (heads != 1 && heads != 3 && heads != 4) || out_buckets < 1 || out_buckets > 16)
+            return fail("unsupported architecture");
+        size_t n_ft = size_t(N_BUCKETS) * FEATURES * l1, n_ow = size_t(out_buckets) * heads * 2 * l1;
+        size_t n_ob = size_t(out_buckets) * heads;
+        if (quantized) { vec(q_ft_w, n_ft); vec(q_ft_b, l1); vec(q_out_w, n_ow); vec(q_out_b, n_ob); }
+        else { vec(ft_w, n_ft); vec(ft_b, l1); vec(out_w, n_ow); vec(out_b, n_ob); }
     } else {
         return fail("unsupported version");
     }
@@ -80,13 +90,13 @@ bool Net::load_bytes(const char* data, size_t size, const std::string& name, std
 }
 
 void Net::finalize() {
-    fast_out = quantized && version == 1 && l1 <= MAX_L1;
+    fast_out = quantized && version != 2 && l1 <= MAX_L1;
     for (int16_t w : q_out_w)
         if (std::abs(int(w)) * QA > 32767) { fast_out = false; break; }
 }
 
 int king_layout(const Net& net, Color persp, int ksq) {
-    if (net.version != 2) return 0;
+    if (net.version < 2) return 0;
     int k = persp == BLACK ? ksq ^ 56 : ksq;
     bool mirror = (k & 7) >= 4;
     int f = mirror ? 7 - (k & 7) : (k & 7);
@@ -94,7 +104,7 @@ int king_layout(const Net& net, Color persp, int ksq) {
 }
 
 int feature_index(const Net& net, Color persp, Piece p, int sq, int layout) {
-    if (net.version != 2) return feature(persp, p, sq);
+    if (net.version < 2) return feature(persp, p, sq);
     int s = persp == BLACK ? sq ^ 56 : sq;
     if (layout & 1) s ^= 7;
     int rel = color_of(p) == persp ? 0 : 1;
@@ -240,7 +250,7 @@ static int select_expert_q(const Net& net, const uint8_t* x, const Position& pos
 }
 
 void Net::forward(const Position& pos, float* out) const {
-    if (quantized && version == 2) {
+    if (quantized && version >= 2) {
         auto acc = std::make_unique<Accumulator>();
         refresh(*this, pos, *acc);
         output(*this, *acc, pos, out, false);
@@ -282,6 +292,28 @@ void Net::forward(const Position& pos, float* out) const {
             z2[j] = s;
         }
         tail_v2(*this, e, z2, gate, out);
+        return;
+    }
+    if (!quantized && version == 3) {
+        const int ob = out_bucket(pos);
+        std::vector<float> x(size_t(2) * l1);
+        for (int v = 0; v < 2; ++v) {
+            std::vector<float> a(ft_b.begin(), ft_b.end());
+            int layout = king_layout(*this, persp[v], pos.king_sq(persp[v]));
+            Bitboard occ = pos.pieces();
+            while (occ) {
+                int s = pop_lsb(occ);
+                const float* w = &ft_w[size_t(feature_index(*this, persp[v], pos.board[s], s, layout)) * l1];
+                for (int i = 0; i < l1; ++i) a[i] += w[i];
+            }
+            for (int i = 0; i < l1; ++i) { float c = std::min(std::max(a[i], 0.0f), 1.0f); x[size_t(v) * l1 + i] = c * c; }
+        }
+        for (int h = 0; h < heads; ++h) {
+            const float* w = &out_w[(size_t(ob) * heads + h) * 2 * l1];
+            float sum = out_b[size_t(ob) * heads + h];
+            for (int i = 0; i < 2 * l1; ++i) sum += x[i] * w[i];
+            out[h] = sum;
+        }
         return;
     }
     if (!quantized) {
@@ -339,7 +371,7 @@ static void refresh_persp(const Net& net, const Position& pos, Color c, int16_t*
         if (sign > 0) for (int i = 0; i < n; ++i) a[i] = int16_t(a[i] + w[i]);
         else for (int i = 0; i < n; ++i) a[i] = int16_t(a[i] - w[i]);
     };
-    if (finny && net.version == 2) {
+    if (finny && net.version >= 2) {
         Finny::Entry& e = finny->e[c][layout];
         if (!e.valid) {
             std::memcpy(e.acc, net.q_ft_b.data(), sizeof(int16_t) * n);
@@ -384,7 +416,7 @@ void update(const Net& net, const Position& parent, const Position& child, const
         }
     for (int c = 0; c < 2; ++c) {
         const int layout = king_layout(net, Color(c), child.king_sq(Color(c)));
-        if (net.version == 2 && layout != king_layout(net, Color(c), parent.king_sq(Color(c)))) {
+        if (net.version >= 2 && layout != king_layout(net, Color(c), parent.king_sq(Color(c)))) {
             refresh_persp(net, child, Color(c), to.v[c], finny);   // king changed bucket or side: features all move
             continue;
         }
@@ -421,16 +453,17 @@ void output(const Net& net, const Accumulator& acc, const Position& pos, float* 
         return;
     }
     const int16_t* persp[2] = {acc.v[stm], acc.v[~stm]};
+    const int ob = net.version == 3 ? net.out_bucket(pos) : 0;     // v1: a single bucket
     for (int h = 0; h < net.heads; ++h) {
         int64_t sum = 0;
         for (int v = 0; v < 2; ++v) {
-            const int16_t* w = &net.q_out_w[size_t(h) * 2 * n + size_t(v) * n];
+            const int16_t* w = &net.q_out_w[(size_t(ob) * net.heads + h) * 2 * n + size_t(v) * n];
 #ifdef __AVX2__
             if (simd && net.fast_out && n % 16 == 0) { sum += screlu_dot_avx2(persp[v], w, n); continue; }
 #endif
             sum += screlu_dot_scalar(persp[v], w, n);
         }
-        out[h] = float((double(sum) + double(net.q_out_b[h])) / (double(QA) * QA * QB));
+        out[h] = float((double(sum) + double(net.q_out_b[size_t(ob) * net.heads + h])) / (double(QA) * QA * QB));
     }
 }
 
