@@ -4,6 +4,21 @@ Bulwark is a bitboard C++ chess engine (UCI, Chess960, PVS search) being built i
 
 Source of truth for scope: `PLAN_REMAINING.md` (uncommitted) and `project_B_nnue_chess_engine.md`. Frozen formats: `docs/interfaces.md`, `docs/pipeline.md`.
 
+## Update 2026-11-26 (roadmap to maximum Elo: phases 0-2 done, phase 3 in progress)
+
+- **Nets trained** (46.3M positions, Lc0 + SF19 labels; server GPU, 1 h 23 min): N1 +447 / N1-WDL +296 vs the
+  handcrafted eval at 25k nodes; **N1 +395 at 8+0.08**. N2/N3 overfit and are shelved.
+- **Dual-head net n1dual** (scalar search head + W/D/L head) plays like N1 (+9 +/- 12) and is **built into the binary**
+  as the default (`EvalFile=none` = handcrafted eval).
+- **Phase 2 search** (one-switch SPRTs, laptop + shared server): history bonus +63, singular extensions +62,
+  correction history +24, razoring +22, capture history +12, continuation history +8; ProbCut and history pruning
+  off. **Combined: +142 +/- 30 at 8+0.08** over the pre-Phase-2 engine. Estimated strength now ~3250-3300.
+- **Phase 3 in progress:** 1.5B Lc0-label positions being built on Kaggle (`kaggle/datagen_lc0.py`); N4 net
+  (8 king buckets x 768 -> 1024, 8 output buckets, dual head, format v3) coded and parity-tested; training on the
+  server GPU once the data is there.
+- Results: `results/registry.csv`. Code: github.com/Ardx19/chess-engine-bulwark (private). Plan:
+  `PLAN_REMAINING.md` and the approved roadmap (phases 0-5).
+
 ## Summary
 
 | Phase | Status |
