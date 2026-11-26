@@ -45,6 +45,11 @@ struct Options {
     bool cont_hist = true;         // Phase 2.1: continuation history (1- and 2-ply) for ordering and LMR
     bool hist_bonus2 = true;       // Phase 2: +63 +/- 16 (798 g); linear history bonus min(170*d - 100, 1700) instead of d^2
     bool hist_prune = false;       // Phase 2.3: prune quiets with very bad (main + continuation) history at low depth
+    bool hist_prune_soft = false;  // Phase 2.3b: gentler variant (depth <= 3, history < -4096 * depth)
+    bool singular_ext = false;     // Phase 2.4: singular extensions (+ multi-cut and negative extensions)
+    bool corr_hist = false;        // Phase 2.5: pawn-structure correction history on the static eval
+    bool razoring = false;         // Phase 2.7: razoring into qsearch at low depth far below alpha
+    bool probcut = false;          // Phase 2.7: ProbCut with good captures at reduced depth
     bool capt_hist = true;         // Phase 2.2: +12.3 +/- 10.8 (2000 g); capture history (piece, to, captured type) for capture ordering
     bool tm_scaling = true;        // time management: node fraction + best-move stability
     bool d3_rule50 = true;         // D3: scale eval toward draw with the halfmove clock
@@ -103,10 +108,20 @@ private:
     Move pv_[MAX_PLY + 4][MAX_PLY + 4];
     int pv_len_[MAX_PLY + 4];
     Move killers_[MAX_PLY + 4][2];
-    int16_t history_[COLOR_NB][64][64];
+    int16_t history_[COLOR_NB][64][64] = {};
     std::unique_ptr<int16_t[]> cont_;
+    Move excluded_[MAX_PLY + 4] = {};   // singular-extension search: the move excluded at this ply
+    int corr_[COLOR_NB][16384] = {};    // pawn-structure correction history, 1/256 internal units
+    static int pawn_index(const Position& pos) {
+        uint64_t h = pos.pieces(WHITE, PAWN) * 0x9E3779B97F4A7C15ULL ^ pos.pieces(BLACK, PAWN) * 0xC2B2AE3D27D4EB4FULL;
+        return int((h >> 40) & 16383);
+    }
+    int corrected(const Position& pos, int e) const {
+        if (!opt.corr_hist || e == NO_EVAL) return e;
+        return std::clamp(e + corr_[pos.stm][pawn_index(pos)] / 256, -DECISIVE + 1, DECISIVE - 1);
+    }
     int16_t* cm_[MAX_PLY + 4] = {};
-    int16_t capt_[12][64][7];      // capture history: moving piece, to-square, captured type (6 = none: quiet promotion)
+    int16_t capt_[12][64][7] = {}; // capture history: moving piece, to-square, captured type (6 = none: quiet promotion)
     int16_t& capt_entry(const Position& pos, Move m) {
         int victim = m.is_ep() ? PAWN : (pos.board[m.to()] == NO_PIECE ? 6 : type_of(pos.board[m.to()]));
         return capt_[pos.board[m.from()]][m.to()][victim];

@@ -149,6 +149,11 @@ struct Engine {
                 std::puts("option name CaptHist type check default true");
                 std::puts("option name HistBonus2 type check default true");
                 std::puts("option name HistPrune type check default false");
+                std::puts("option name HistPruneSoft type check default false");
+                std::puts("option name SingularExt type check default false");
+                std::puts("option name CorrHist type check default false");
+                std::puts("option name Razoring type check default false");
+                std::puts("option name ProbCut type check default false");
                 for (const char* n : {"Aspiration", "RFP", "NMP", "LMR", "KillersHistory", "LMPFutility", "IIR", "Improving",
                                       "SEEPrune", "ContHist", "TMScaling", "D3_Rule50Scale", "D4_Syzygy", "D5_StalemateGuard"})
                     std::printf("option name %s type check default true\n", n);

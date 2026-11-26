@@ -32,6 +32,11 @@ bool* Options::flag(const std::string& n) {
     if (n == "CaptHist") return &capt_hist;
     if (n == "HistBonus2") return &hist_bonus2;
     if (n == "HistPrune") return &hist_prune;
+    if (n == "HistPruneSoft") return &hist_prune_soft;
+    if (n == "SingularExt") return &singular_ext;
+    if (n == "CorrHist") return &corr_hist;
+    if (n == "Razoring") return &razoring;
+    if (n == "ProbCut") return &probcut;
     if (n == "TMScaling") return &tm_scaling;
     if (n == "D3_Rule50Scale") return &d3_rule50;
     if (n == "D5_StalemateGuard") return &d5_stalemate;
@@ -124,6 +129,8 @@ void Searcher::new_game() {
     std::memset(killers_, 0, sizeof(killers_));
     std::fill(cont_.get(), cont_.get() + CONT_SIZE, int16_t(0));
     std::memset(capt_, 0, sizeof(capt_));
+    std::memset(corr_, 0, sizeof(corr_));
+    std::fill(std::begin(excluded_), std::end(excluded_), MOVE_NONE);
 }
 
 int64_t Searcher::elapsed_ms() const {
@@ -226,7 +233,7 @@ int Searcher::qsearch(int ply, int alpha, int beta, bool first) {
             if (!l.size()) return draw_score(ply);
         }
         eval = found && tte.eval != NO_EVAL ? tte.eval : evaluate(ply);
-        best = adjust(ply, eval);
+        best = corrected(pos, adjust(ply, eval));
         if (best >= beta) return best;
         // D6: far below alpha at the first qsearch ply, also try quiet checks (perpetual-check seeking).
         quiet_checks = opt.d6_perpetual && first && best + 250 <= alpha && alpha < DECISIVE;
@@ -281,6 +288,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
     pv_len_[ply] = ply;
     const bool root = ply == 0;
     const bool in_check = pos.in_check();
+    const Move excl = excluded_[ply];
 
     if (!root) {
         if (pos.rule50 >= 100) {
@@ -297,7 +305,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
     TTData tte;
     bool found = tt.probe(pos.key, tte);
     Move tt_move = found ? tte.move : MOVE_NONE;
-    if (found && !PV && tte.depth >= depth && pos.rule50 < 90) {
+    if (found && !PV && !excl && tte.depth >= depth && pos.rule50 < 90) {
         int s = tte.score;
         if (s >= DECISIVE) s -= ply; else if (s <= -DECISIVE) s += ply;
         if ((tte.bound == BOUND_EXACT) || (tte.bound == BOUND_LOWER && s >= beta) ||
@@ -306,7 +314,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
     }
 
     // D4: Syzygy WDL probe. Tables assume a zero halfmove clock and no castling rights.
-    if (opt.d4_syzygy && !root && pos.rule50 == 0 && !pos.castling && TB::largest() > 0 &&
+    if (opt.d4_syzygy && !root && !excl && pos.rule50 == 0 && !pos.castling && TB::largest() > 0 &&
         popcount(pos.pieces()) <= TB::largest()) {
         int w = TB::probe_wdl(pos);
         if (w != TB::FAIL) {
@@ -317,13 +325,20 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
     }
 
     int raw_eval = in_check ? NO_EVAL : (found && tte.eval != NO_EVAL ? tte.eval : evaluate(ply));
-    int eval = in_check ? NO_EVAL : adjust(ply, raw_eval);
+    const int base_eval = in_check ? NO_EVAL : adjust(ply, raw_eval);
+    int eval = in_check ? NO_EVAL : corrected(pos, base_eval);
     static_eval_[ply] = eval;
     const bool improving = opt.improving && !in_check && ply >= 2 && static_eval_[ply - 2] != NO_EVAL &&
                            eval > static_eval_[ply - 2];
     const bool not_mated_range = beta > -DECISIVE && beta < DECISIVE;
 
-    if (!PV && !in_check && !root) {
+    if (!PV && !in_check && !root && !excl) {
+        // Razoring: hopeless at low depth -> verify with the capture search only
+        if (opt.razoring && depth <= 3 && eval + 250 * depth < alpha && not_mated_range) {
+            int v = qsearch(ply, alpha, alpha + 1);
+            if (stopped_) return 0;
+            if (v < alpha) return v;
+        }
         // 2. Reverse futility pruning
         if (opt.rfp && depth <= 8 && not_mated_range && eval - 80 * (depth - improving) >= beta) return eval;
         // 3. Null move pruning
@@ -338,6 +353,29 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
             null_prev_[ply + 1] = false;
             if (stopped_) return 0;
             if (s >= beta) return s >= DECISIVE ? beta : s;
+        }
+        // ProbCut: a good capture that beats beta + margin at reduced depth cuts this node
+        if (opt.probcut && depth >= 5 && not_mated_range) {
+            const int pbeta = beta + 200;
+            int tts = found ? tte.score : 0;
+            if (!(found && tte.depth >= depth - 3 && tts < pbeta)) {
+                MoveList cl;
+                generate<GEN_CAPTURES>(pos, cl);
+                for (Move m : cl) {
+                    if (!pos.is_legal(m) || !pos.see_ge(m, pbeta - eval)) continue;
+                    cm_[ply] = opt.cont_hist ? &cont_[size_t(pos.board[m.from()] * 64 + m.to()) * 768] : nullptr;
+                    stack_[ply + 1] = pos.make(m);
+                    acc_[ply + 1].computed = false;
+                    null_prev_[ply + 1] = false;
+                    int v = -qsearch(ply + 1, -pbeta, -pbeta + 1);
+                    if (v >= pbeta && !stopped_) v = -search<false>(ply + 1, depth - 4, -pbeta, -pbeta + 1);
+                    if (stopped_) return 0;
+                    if (v >= pbeta) {
+                        tt.store(pos.key, m, v, raw_eval, depth - 3, BOUND_LOWER);
+                        return v;
+                    }
+                }
+            }
         }
     }
     // 7. Internal iterative reduction
@@ -355,12 +393,29 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
     int nq = 0, nc = 0;
     const int orig_alpha = alpha;
 
+    // Singular extension: if every move but the TT move fails low against a margin below the TT score, the TT move
+    // is singular and gets one ply more; if even that search beats beta, cut (multi-cut); if the TT score alone
+    // beats beta, reduce the TT move instead (negative extension).
+    int sing_ext = 0;
+    if (opt.singular_ext && !root && !excl && tt_move && depth >= 7 && found && tte.depth >= depth - 3 &&
+        (tte.bound & BOUND_LOWER) && std::abs(tte.score) < DECISIVE && ply < 2 * root_depth_) {
+        const int ttv = tte.score;
+        const int sbeta = ttv - 2 * depth;
+        excluded_[ply] = tt_move;
+        int v = search<false>(ply, (depth - 1) / 2, sbeta - 1, sbeta);
+        excluded_[ply] = MOVE_NONE;
+        if (stopped_) return 0;
+        if (v < sbeta) sing_ext = 1;
+        else if (sbeta >= beta) return sbeta;
+        else if (ttv >= beta) sing_ext = -1;
+    }
+
     for (int i = 0; i < ml.size(); ++i) {
         int bi = i;
         for (int j = i + 1; j < ml.size(); ++j) if (scores[j] > scores[bi]) bi = j;
         std::swap(ml.moves[i], ml.moves[bi]); std::swap(scores[i], scores[bi]);
         Move m = ml.moves[i];
-        if (!pos.is_legal(m)) continue;
+        if (m == excl || !pos.is_legal(m)) continue;
         if (root && root_filtered_) {
             bool allowed = false;
             for (Move a : root_allowed_) if (a == m) { allowed = true; break; }
@@ -374,9 +429,11 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
             // 6. Late move pruning
             if (opt.lmp_futility && quiet && depth <= 8 && legal > (3 + depth * depth) * (1 + improving)) continue;
             // History pruning: quiets whose history says they rarely work
-            if (opt.hist_prune && quiet && depth <= 4 && m != killers_[ply][0] && m != killers_[ply][1] &&
-                history_[pos.stm][m.from()][m.to()] + (opt.cont_hist ? cont_score(ply, pos.board[m.from()], m.to()) : 0) < -2048 * depth)
-                continue;
+            if ((opt.hist_prune || opt.hist_prune_soft) && quiet && m != killers_[ply][0] && m != killers_[ply][1]) {
+                int h = history_[pos.stm][m.from()][m.to()] + (opt.cont_hist ? cont_score(ply, pos.board[m.from()], m.to()) : 0);
+                if ((opt.hist_prune && depth <= 4 && h < -2048 * depth) || (opt.hist_prune_soft && depth <= 3 && h < -4096 * depth))
+                    continue;
+            }
             // 9. SEE pruning
             if (opt.see_prune && depth <= 6 && !m.is_promo()) {
                 if (quiet ? !pos.see_ge(m, -25 * depth * depth) : !pos.see_ge(m, -90 * depth)) continue;
@@ -395,7 +452,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
             eval + 90 + 90 * depth <= alpha)
             continue;
 
-        int nd = depth - 1 + (gives_check ? 1 : 0);
+        int nd = depth - 1 + (gives_check ? 1 : 0) + (m == tt_move ? sing_ext : 0);
         int score;
         uint64_t before = nodes_;
         if (legal == 1) {
@@ -461,7 +518,17 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
         }
     }
 
-    if (legal == 0) return in_check ? -MATE + ply : draw_score(ply);
+    if (legal == 0) return excl ? alpha : in_check ? -MATE + ply : draw_score(ply);
+    if (excl) return best;                    // singular verification search: no TT store, no history update
+
+    // Correction history: move this pawn structure's correction toward (search result - static eval).
+    if (opt.corr_hist && !in_check && (!best_move || !best_move.is_capture()) && std::abs(best) < DECISIVE &&
+        !(best >= beta && best <= eval) && !(best <= orig_alpha && best >= eval)) {
+        int& c = corr_[pos.stm][pawn_index(pos)];
+        int w = std::min(depth + 1, 16);
+        int diff = std::clamp(best - base_eval, -400, 400) * 256;
+        c = std::clamp((c * (256 - w) + diff * w) / 256, -64 * 256, 64 * 256);
+    }
 
     int stored = best;
     if (stored >= DECISIVE) stored += ply; else if (stored <= -DECISIVE) stored -= ply;
