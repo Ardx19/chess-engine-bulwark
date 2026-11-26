@@ -146,8 +146,10 @@ struct Engine {
                 std::puts("option name Threads type spin default 1 min 1 max 1");
                 std::puts("option name Move Overhead type spin default 10 min 0 max 5000");
                 std::puts("option name UCI_Chess960 type check default false");
+                std::puts("option name CaptHist type check default false");
+                std::puts("option name HistBonus2 type check default true");
                 for (const char* n : {"Aspiration", "RFP", "NMP", "LMR", "KillersHistory", "LMPFutility", "IIR", "Improving",
-                                      "SEEPrune", "TMScaling", "D3_Rule50Scale", "D4_Syzygy", "D5_StalemateGuard"})
+                                      "SEEPrune", "ContHist", "TMScaling", "D3_Rule50Scale", "D4_Syzygy", "D5_StalemateGuard"})
                     std::printf("option name %s type check default true\n", n);
                 for (const char* n : {"D1_WDLUtility", "DefenseMode", "D6_PerpetualSeek", "D7_FortressDetect", "UCI_ShowWDL"})
                     std::printf("option name %s type check default false\n", n);

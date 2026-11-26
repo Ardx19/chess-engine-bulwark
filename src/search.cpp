@@ -28,6 +28,9 @@ bool* Options::flag(const std::string& n) {
     if (n == "IIR") return &iir;
     if (n == "Improving") return &improving;
     if (n == "SEEPrune") return &see_prune;
+    if (n == "ContHist") return &cont_hist;
+    if (n == "CaptHist") return &capt_hist;
+    if (n == "HistBonus2") return &hist_bonus2;
     if (n == "TMScaling") return &tm_scaling;
     if (n == "D3_Rule50Scale") return &d3_rule50;
     if (n == "D5_StalemateGuard") return &d5_stalemate;
@@ -118,6 +121,8 @@ void Searcher::new_game() {
     fortress_moves_ = 0;
     std::memset(history_, 0, sizeof(history_));
     std::memset(killers_, 0, sizeof(killers_));
+    std::fill(cont_.get(), cont_.get() + CONT_SIZE, int16_t(0));
+    std::memset(capt_, 0, sizeof(capt_));
 }
 
 int64_t Searcher::elapsed_ms() const {
@@ -152,6 +157,22 @@ void Searcher::update_history(Color c, Move m, int bonus) {
     h += b - h * std::abs(b) / 16384;
 }
 
+int Searcher::cont_score(int ply, Piece pc, int to) const {
+    int s = 0;
+    for (int k = 1; k <= 2; ++k)
+        if (ply - k >= 0 && cm_[ply - k]) s += cm_[ply - k][pc * 64 + to];
+    return s;
+}
+
+void Searcher::update_cont(int ply, Piece pc, int to, int bonus) {
+    int b = std::clamp(bonus, -2000, 2000);
+    for (int k = 1; k <= 2; ++k)
+        if (ply - k >= 0 && cm_[ply - k]) {
+            int16_t& h = cm_[ply - k][pc * 64 + to];
+            h += b - h * std::abs(b) / 16384;
+        }
+}
+
 int Searcher::score_moves(const Position& pos, int ply, Move tt_move, MoveList& ml, int* scores) {
     for (int i = 0; i < ml.size(); ++i) {
         Move m = ml.moves[i];
@@ -161,11 +182,12 @@ int Searcher::score_moves(const Position& pos, int ply, Move tt_move, MoveList& 
             int victim = m.is_ep() ? PAWN : (pos.board[m.to()] == NO_PIECE ? NO_PT : type_of(pos.board[m.to()]));
             int attacker = type_of(pos.board[m.from()]);
             int mvv = 16 * PieceVal[victim] - PieceVal[attacker] / 8 + (m.is_promo() ? 800 : 0);
+            if (opt.capt_hist) mvv += capt_entry(pos, m) / 8;
             s = pos.see_ge(m, 0) ? 1000000 + mvv : -1000000 + mvv;
         } else if (!opt.killers_history) s = 0;
         else if (m == killers_[ply][0]) s = 900000;
         else if (m == killers_[ply][1]) s = 800000;
-        else s = history_[pos.stm][m.from()][m.to()];
+        else s = history_[pos.stm][m.from()][m.to()] + (opt.cont_hist ? cont_score(ply, pos.board[m.from()], m.to()) : 0);
         scores[i] = s;
     }
     return ml.size();
@@ -308,6 +330,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
             pos.has_non_pawn_material(pos.stm)) {
             int R = 3 + depth / 3 + std::min((eval - beta) / 200, 3);
             stack_[ply + 1] = pos.make_null();
+            cm_[ply] = nullptr;
             acc_[ply + 1].computed = false;
             null_prev_[ply + 1] = true;
             int s = -search<false>(ply + 1, depth - R, -beta, -beta + 1);
@@ -327,8 +350,8 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
     int best = -INF;
     Move best_move = MOVE_NONE;
     int legal = 0;
-    Move quiets[64];
-    int nq = 0;
+    Move quiets[64], caps[32];
+    int nq = 0, nc = 0;
     const int orig_alpha = alpha;
 
     for (int i = 0; i < ml.size(); ++i) {
@@ -355,6 +378,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
             }
         }
 
+        cm_[ply] = opt.cont_hist ? &cont_[size_t(pos.board[m.from()] * 64 + m.to()) * 768] : nullptr;
         stack_[ply + 1] = pos.make(m);
         acc_[ply + 1].computed = false;
         null_prev_[ply + 1] = false;
@@ -379,7 +403,11 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
                 r -= PV;
                 r -= improving;
                 r -= gives_check;
-                if (opt.killers_history) r -= std::clamp(int(history_[pos.stm][m.from()][m.to()]) / 4096, -2, 2);
+                if (opt.killers_history) {
+                    int hs = history_[pos.stm][m.from()][m.to()];
+                    if (opt.cont_hist) r -= std::clamp((hs + cont_score(ply, pos.board[m.from()], m.to())) / 8192, -2, 2);
+                    else r -= std::clamp(hs / 4096, -2, 2);
+                }
                 r = std::clamp(r, 0, nd - 1);
             }
             score = -search<false>(ply + 1, nd - r, -alpha - 1, -alpha);
@@ -390,6 +418,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
         if (root) root_move_nodes_[m.from()][m.to()] += nodes_ - before;
 
         if (quiet && nq < 64) quiets[nq++] = m;
+        else if (!quiet && nc < 32) caps[nc++] = m;
         if (score > best) {
             best = score;
             best_move = m;
@@ -401,11 +430,25 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
                     pv_len_[ply] = std::max(pv_len_[ply + 1], ply + 1);
                 }
                 if (score >= beta) {
+                    if (opt.capt_hist) {     // reward the refuting capture, penalise captures tried before it
+                        int cb = opt.hist_bonus2 ? std::min(170 * depth - 100, 1700) : depth * depth;
+                        auto upd = [&](Move c, int b) {
+                            int16_t& h = capt_entry(pos, c);
+                            b = std::clamp(b, -2000, 2000);
+                            h += b - h * std::abs(b) / 16384;
+                        };
+                        if (!quiet) upd(m, cb);
+                        for (int k = 0; k < nc; ++k) if (caps[k] != m) upd(caps[k], -cb);
+                    }
                     if (quiet && opt.killers_history) {
                         if (killers_[ply][0] != m) { killers_[ply][1] = killers_[ply][0]; killers_[ply][0] = m; }
-                        int bonus = depth * depth;
+                        int bonus = opt.hist_bonus2 ? std::min(170 * depth - 100, 1700) : depth * depth;
                         update_history(pos.stm, m, bonus);
                         for (int k = 0; k < nq - 1; ++k) update_history(pos.stm, quiets[k], -bonus);
+                        if (opt.cont_hist) {
+                            update_cont(ply, pos.board[m.from()], m.to(), bonus);
+                            for (int k = 0; k < nq - 1; ++k) update_cont(ply, pos.board[quiets[k].from()], quiets[k].to(), -bonus);
+                        }
                     }
                     break;
                 }
