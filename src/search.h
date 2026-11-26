@@ -49,7 +49,7 @@ struct Options {
     bool singular_ext = true;      // Phase 2.4: +61.6 +/- 15.3 (838 g, H1); singular extensions (+ multi-cut and negative extensions)
     bool corr_hist = true;         // Phase 2.5: +24.2 +/- 10.2 (2000 g); pawn-structure correction history on the static eval
     bool razoring = true;          // Phase 2.7: +21.9 +/- 9.9 (2000 g); razoring into qsearch at low depth far below alpha
-    bool tm_score_drop = false;    // Phase 2.8: spend more time when the score drops between iterations
+    bool tm_score_drop = true;     // Phase 2.8: +10.1 +/- 10.3 (1522 g, server, interrupted); spend more time when the score drops between iterations
     bool lmr_captures = false;     // Phase 2.6: reduce late captures with bad capture history
     bool double_ext = false;       // Phase 2.4b: double singular extension (non-PV, capped per path)
     bool probcut = false;          // Phase 2.7: +3.5 +/- 10.1 (2000 g), off; ProbCut with good captures at reduced depth

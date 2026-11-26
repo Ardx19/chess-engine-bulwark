@@ -148,7 +148,7 @@ struct Engine {
                 std::puts("option name UCI_Chess960 type check default false");
                 std::puts("option name CaptHist type check default true");
                 std::puts("option name HistBonus2 type check default true");
-                std::puts("option name TMScoreDrop type check default false");
+                std::puts("option name TMScoreDrop type check default true");
                 std::puts("option name LmrCaptures type check default false");
                 std::puts("option name DoubleExt type check default false");
                 std::puts("option name HistPrune type check default false");

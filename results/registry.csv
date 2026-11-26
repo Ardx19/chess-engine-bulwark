@@ -32,3 +32,4 @@ date,commit,bench,kind,new,base,setting,games,wins,draws,losses,elo,elo_err,llr,
 2026-11-26,1d9ccef,123632,sprt,ProbCut=true,ProbCut=false,"4+0.04, server conc 16, bench 111055",,,,,,,,,,+3.47 +/- 10.14 over 2000 games,,,"server_sprt summary 2026-11-26, 0 time losses"
 2026-11-26,1d9ccef,123632,sprt,HistPruneSoft=true,HistPruneSoft=false,"4+0.04, server conc 16, bench 111055",,,,,,,,,,-12.51 +/- 9.66 over 2000 games,,,"server_sprt summary 2026-11-26, 0 time losses"
 2026-11-26,1d9ccef,123632,sprt,ContHist (with HistBonus2)=true,ContHist (with HistBonus2)=false,"4+0.04, server conc 16, bench 111055",,,,,,,,,,+8.34 +/- 9.70 over 2000 games,,,"server_sprt summary 2026-11-26, 0 time losses"
+2026-11-27,73ae422,123632,sprt,TMScoreDrop=true,TMScoreDrop=false,"4+0.04, server conc 16",,,,,,,,,,+10.05 +/- 10.29 over 1522 games (interrupted),,,server batch 2; adopted
