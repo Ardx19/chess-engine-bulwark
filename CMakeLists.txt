@@ -41,7 +41,7 @@ target_link_libraries(bulwark core)
 
 # Default evaluation net, embedded in the binary (EvalFile overrides it; EvalFile=none selects the handcrafted eval).
 # Configure with -DBULWARK_NET= (empty) to build without one.
-set(BULWARK_NET "${CMAKE_SOURCE_DIR}/nets/n1/net-169b57d7.nnue" CACHE FILEPATH "net embedded as the default evaluation")
+set(BULWARK_NET "${CMAKE_SOURCE_DIR}/nets/n1dual/net-9ed82c49.nnue" CACHE FILEPATH "net embedded as the default evaluation")
 if(BULWARK_NET)
   if(NOT EXISTS "${BULWARK_NET}")
     message(FATAL_ERROR "BULWARK_NET not found: ${BULWARK_NET}")

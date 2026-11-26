@@ -1,3 +1,5 @@
 name,sha8,arch,l1,heads,experts,router,train_run,data_manifest,positions_seen,steps,val_logloss,test_escore_brier,parent,date,notes
 n1,169b57d7,1,256,1,1,none,run-n1 final.pt (server GPU queue),Kaggle test91 x5 sessions SF19 2k nodes; 46.3M train,983M,60000,0.6589,,-,2026-11-26,scalar head; test escore BCE 0.659; +447 +/- 113 vs HCE at 25k nodes
 n1wdl_best,89d6ee25,2,256,3,1,none,run-n1wdl best.pt step 56000,same dataset as n1,918M,56000,0.6294,,-,2026-11-26,defense-study net; test WDL logloss 0.632 (final.pt e0a3d98b); +296 +/- 68 vs HCE; -64 +/- 27 vs n1 at 25k nodes
+n1dual,9ed82c49,2,256,4,1,none,run-n1dual best.pt (head 4 wdl_detach),same dataset as n1,983M,60000,0.6514,,-,2026-11-26,default embedded net; test escore BCE 0.6589 WDL logloss 0.6548; +9 +/- 12 vs n1 at 25k nodes (2000 games)
+n1dual_joint,08eae324,2,256,4,1,none,run-n1dual_joint best.pt (head 4 wdl_weight 0.25),same dataset as n1,918M,56000,0.6300,,-,2026-11-26,defense-study net; test escore BCE 0.6589 WDL logloss 0.6328; -5 +/- 13 vs n1 at 25k nodes (2000 games)
