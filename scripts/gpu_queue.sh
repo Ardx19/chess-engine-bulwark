@@ -91,7 +91,7 @@ for run in $RUNS; do
   log "start $run"
   # shellcheck disable=SC2046
   "${LOW[@]}" python3 -m nnue.train --run-id "$run" --ckpt-dir "$CKPT" --batch-size "$BATCH" --lr 0.001 --warmup 1000 \
-      --val-every 2000 --loader-workers "$LOADER_WORKERS" --train-glob "$root/train/*.bin" --val-glob "$root/val/*.bin" --resume auto \
+      --val-every 2000 --ckpt-every-s "${CKPT_EVERY_S:-1200}" --loader-workers "$LOADER_WORKERS" --train-glob "$root/train/*.bin" --val-glob "$root/val/*.bin" --resume auto \
       $(args_for "$run") > "$LOGS/$run.log" 2>&1 || { log "FAILED $run (see $LOGS/$run.log)"; exit 1; }
   if grep -q '"stopped_by_signal": true' "$LOGS/$run.log"; then log "stopped $run by signal; rerun to resume"; exit 0; fi
   if grep -q '"complete": false' "$LOGS/$run.log"; then log "stopped $run before its last step (TRAIN_STOP_AT); rerun to resume"; exit 0; fi
