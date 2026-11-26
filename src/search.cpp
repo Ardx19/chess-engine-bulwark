@@ -37,6 +37,9 @@ bool* Options::flag(const std::string& n) {
     if (n == "CorrHist") return &corr_hist;
     if (n == "Razoring") return &razoring;
     if (n == "ProbCut") return &probcut;
+    if (n == "TMScoreDrop") return &tm_score_drop;
+    if (n == "LmrCaptures") return &lmr_captures;
+    if (n == "DoubleExt") return &double_ext;
     if (n == "TMScaling") return &tm_scaling;
     if (n == "D3_Rule50Scale") return &d3_rule50;
     if (n == "D5_StalemateGuard") return &d5_stalemate;
@@ -405,7 +408,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
         int v = search<false>(ply, (depth - 1) / 2, sbeta - 1, sbeta);
         excluded_[ply] = MOVE_NONE;
         if (stopped_) return 0;
-        if (v < sbeta) sing_ext = 1;
+        if (v < sbeta) sing_ext = (opt.double_ext && !PV && v < sbeta - 25 && dext_[ply] < 6) ? 2 : 1;
         else if (sbeta >= beta) return sbeta;
         else if (ttv >= beta) sing_ext = -1;
     }
@@ -444,6 +447,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
         stack_[ply + 1] = pos.make(m);
         acc_[ply + 1].computed = false;
         null_prev_[ply + 1] = false;
+        dext_[ply + 1] = dext_[ply] + (m == tt_move && sing_ext == 2);
         tt.prefetch(stack_[ply + 1].key);
         const bool gives_check = stack_[ply + 1].in_check();
 
@@ -471,6 +475,8 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
                     else r -= std::clamp(hs / 4096, -2, 2);
                 }
                 r = std::clamp(r, 0, nd - 1);
+            } else if (opt.lmr_captures && depth >= 3 && !quiet && !m.is_promo() && legal > 3 && capt_entry(pos, m) < -1000) {
+                r = std::clamp(1, 0, nd - 1);
             }
             score = -search<false>(ply + 1, nd - r, -alpha - 1, -alpha);
             if (score > alpha && r > 0) score = -search<false>(ply + 1, nd, -alpha - 1, -alpha);
@@ -570,6 +576,7 @@ Move Searcher::think(const Position& root, const std::vector<U64>& history, cons
     std::memset(killers_, 0, sizeof(killers_));
     std::memset(root_move_nodes_, 0, sizeof(root_move_nodes_));
     null_prev_[0] = false;
+    dext_[0] = 0;
     tb_hits_ = 0;
     root_allowed_.count = 0;
     root_filtered_ = opt.d4_syzygy && TB::root_filter(root, root_allowed_);
@@ -672,6 +679,7 @@ Move Searcher::think(const Position& root, const std::vector<U64>& history, cons
                 double frac = tot ? double(root_move_nodes_[best.from()][best.to()]) / double(tot) : 0.5;
                 factor = std::clamp(1.8 - 1.4 * frac, 0.5, 1.5) * std::clamp(1.2 - 0.05 * stable, 0.8, 1.2);
             }
+            if (opt.tm_score_drop && d >= 6) factor *= std::clamp(1.0 + (iter_scores[d - 1] - score) / 200.0, 1.0, 1.6);
             if (elapsed_ms() >= soft_ms_ * factor) break;
         }
         if (!lim.infinite && score >= MATE_IN_MAX && MATE - score <= d) break;   // shortest mate already proven

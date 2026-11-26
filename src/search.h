@@ -49,6 +49,9 @@ struct Options {
     bool singular_ext = true;      // Phase 2.4: +61.6 +/- 15.3 (838 g, H1); singular extensions (+ multi-cut and negative extensions)
     bool corr_hist = true;         // Phase 2.5: +24.2 +/- 10.2 (2000 g); pawn-structure correction history on the static eval
     bool razoring = true;          // Phase 2.7: +21.9 +/- 9.9 (2000 g); razoring into qsearch at low depth far below alpha
+    bool tm_score_drop = false;    // Phase 2.8: spend more time when the score drops between iterations
+    bool lmr_captures = false;     // Phase 2.6: reduce late captures with bad capture history
+    bool double_ext = false;       // Phase 2.4b: double singular extension (non-PV, capped per path)
     bool probcut = false;          // Phase 2.7: +3.5 +/- 10.1 (2000 g), off; ProbCut with good captures at reduced depth
     bool capt_hist = true;         // Phase 2.2: +12.3 +/- 10.8 (2000 g); capture history (piece, to, captured type) for capture ordering
     bool tm_scaling = true;        // time management: node fraction + best-move stability
@@ -110,7 +113,8 @@ private:
     Move killers_[MAX_PLY + 4][2];
     int16_t history_[COLOR_NB][64][64] = {};
     std::unique_ptr<int16_t[]> cont_;
-    Move excluded_[MAX_PLY + 4] = {};   // singular-extension search: the move excluded at this ply
+    Move excluded_[MAX_PLY + 4] = {};
+    int dext_[MAX_PLY + 4] = {};   // double extensions on the current path   // singular-extension search: the move excluded at this ply
     int corr_[COLOR_NB][16384] = {};    // pawn-structure correction history, 1/256 internal units
     static int pawn_index(const Position& pos) {
         uint64_t h = pos.pieces(WHITE, PAWN) * 0x9E3779B97F4A7C15ULL ^ pos.pieces(BLACK, PAWN) * 0xC2B2AE3D27D4EB4FULL;
