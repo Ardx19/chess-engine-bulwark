@@ -46,10 +46,10 @@ struct Options {
     bool hist_bonus2 = true;       // Phase 2: +63 +/- 16 (798 g); linear history bonus min(170*d - 100, 1700) instead of d^2
     bool hist_prune = false;       // Phase 2.3: prune quiets with very bad (main + continuation) history at low depth
     bool hist_prune_soft = false;  // Phase 2.3b: gentler variant (depth <= 3, history < -4096 * depth)
-    bool singular_ext = false;     // Phase 2.4: singular extensions (+ multi-cut and negative extensions)
-    bool corr_hist = false;        // Phase 2.5: pawn-structure correction history on the static eval
-    bool razoring = false;         // Phase 2.7: razoring into qsearch at low depth far below alpha
-    bool probcut = false;          // Phase 2.7: ProbCut with good captures at reduced depth
+    bool singular_ext = true;      // Phase 2.4: +61.6 +/- 15.3 (838 g, H1); singular extensions (+ multi-cut and negative extensions)
+    bool corr_hist = true;         // Phase 2.5: +24.2 +/- 10.2 (2000 g); pawn-structure correction history on the static eval
+    bool razoring = true;          // Phase 2.7: +21.9 +/- 9.9 (2000 g); razoring into qsearch at low depth far below alpha
+    bool probcut = false;          // Phase 2.7: +3.5 +/- 10.1 (2000 g), off; ProbCut with good captures at reduced depth
     bool capt_hist = true;         // Phase 2.2: +12.3 +/- 10.8 (2000 g); capture history (piece, to, captured type) for capture ordering
     bool tm_scaling = true;        // time management: node fraction + best-move stability
     bool d3_rule50 = true;         // D3: scale eval toward draw with the halfmove clock
