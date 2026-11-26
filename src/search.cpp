@@ -537,13 +537,14 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
     return best;
 }
 
-void Searcher::print_info(int depth, int score) {
+void Searcher::print_info(int depth, int score, const char* bound) {
     int64_t ms = std::max<int64_t>(elapsed_ms(), 1);
     std::string sc;
     if (std::abs(score) >= MATE_IN_MAX) {
         int n = (MATE - std::abs(score) + 1) / 2;
         sc = "mate " + std::to_string(score > 0 ? n : -n);
     } else sc = "cp " + std::to_string(score);
+    sc += bound;
     std::string pv;
     for (int i = 0; i < pv_len_[0]; ++i) pv += " " + stack_[0].move_to_uci(pv_[0][i], opt.chess960);
     int wdl[3];
@@ -636,7 +637,12 @@ Move Searcher::think(const Position& root, const std::vector<U64>& history, cons
             if (stopped_) break;
             if (s > alpha && pv_len_[0] > 0) best = pv_[0][0];   // fail-high or exact: PV is valid
             if (s <= alpha) { beta = (alpha + beta) / 2; alpha = std::max(s - delta, -INF); }
-            else if (s >= beta) beta = std::min(s + delta, INF);
+            else if (s >= beta) {
+                // The fail-high move becomes the move we would play: report it now, so that if time runs out
+                // during the re-search the last info line's PV starts with the bestmove we send.
+                if (print && pv_len_[0] > 0 && best != prev_best) print_info(d, s, " lowerbound");
+                beta = std::min(s + delta, INF);
+            }
             else break;
             delta += delta / 2;
             if (delta > 600) { alpha = -INF; beta = INF; }

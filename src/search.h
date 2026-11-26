@@ -99,7 +99,7 @@ private:
     static constexpr size_t CONT_SIZE = size_t(12 * 64) * (12 * 64);
     int cont_score(int ply, Piece pc, int to) const;
     void update_cont(int ply, Piece pc, int to, int bonus);
-    void print_info(int depth, int score);
+    void print_info(int depth, int score, const char* bound = "");
     int64_t elapsed_ms() const;
 
     Position stack_[MAX_PLY + 4];
