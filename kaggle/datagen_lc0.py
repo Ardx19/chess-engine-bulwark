@@ -104,16 +104,18 @@ def main():
     stop = threading.Event()
 
     def downloader(names):
-        for name in names:
-            if stop.is_set():
-                return
-            path = os.path.join(a.tmp, name)
-            try:
-                dt = download(f"{BASE}{a.run}/{name}", path) if a.max_games == 0 or not os.path.exists(path) else 0.0
-                q.put((name, path, dt))
-            except Exception as e:      # noqa: BLE001 - skip a tar that will not download
-                log(f"download failed, skipping {name}: {e}")
-        q.put(None)
+        try:
+            for name in names:
+                if stop.is_set():
+                    break
+                path = os.path.join(a.tmp, name)
+                try:
+                    dt = download(f"{BASE}{a.run}/{name}", path) if a.max_games == 0 or not os.path.exists(path) else 0.0
+                    q.put((name, path, dt))
+                except Exception as e:      # noqa: BLE001 - skip a tar that will not download
+                    log(f"download failed, skipping {name}: {e}")
+        finally:
+            q.put(None)                     # always signal the end, also when stopping early (target/deadline)
 
     workers = [threading.Thread(target=downloader, args=(todo[i::a.downloads],), daemon=True) for i in range(a.downloads)]
     for w in workers:
