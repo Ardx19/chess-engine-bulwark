@@ -26,3 +26,9 @@ date,commit,bench,kind,new,base,setting,games,wins,draws,losses,elo,elo_err,llr,
 2026-11-26,153af76,111055,sprt,CaptHist=true,CaptHist=false,"4+0.04, HistBonus2 on, n1dual",2000,575,921,504,12.34,10.78,1.24,"[0.00, 5.00]",no verdict,,,results/features/CaptHist.log,
 2026-11-26,62a4933,111055,sprt,HistPrune=true,HistPrune=false,4+0.04,540,114,283,143,-18.68,19.53,-0.68,"[0.00, 5.00]",no verdict,,,results/features/HistPrune.log,"stopped at 540 games: negative, kept off"
 2026-11-26,67dd44f,123632,sprt,"67dd44f phase 2 (SE, CorrHist, Razoring, CaptHist, HistBonus2, ContHist)",ca8d963 pre-phase-2,8+0.08,240,107,119,14,142.05,29.77,2.95,"[0.00, 10.00]",H1,,,results/phase2-combined-20261126-2053/log.txt,
+2026-11-26,1d9ccef,123632,sprt,SingularExt=true,SingularExt=false,"4+0.04, server conc 16, bench 111055",,,,,,,,,,+61.58 +/- 15.32 (H1) over 838 games,,,"server_sprt summary 2026-11-26, 0 time losses"
+2026-11-26,1d9ccef,123632,sprt,CorrHist=true,CorrHist=false,"4+0.04, server conc 16, bench 111055",,,,,,,,,,+24.19 +/- 10.15 over 2000 games,,,"server_sprt summary 2026-11-26, 0 time losses"
+2026-11-26,1d9ccef,123632,sprt,Razoring=true,Razoring=false,"4+0.04, server conc 16, bench 111055",,,,,,,,,,+21.92 +/- 9.91 over 2000 games,,,"server_sprt summary 2026-11-26, 0 time losses"
+2026-11-26,1d9ccef,123632,sprt,ProbCut=true,ProbCut=false,"4+0.04, server conc 16, bench 111055",,,,,,,,,,+3.47 +/- 10.14 over 2000 games,,,"server_sprt summary 2026-11-26, 0 time losses"
+2026-11-26,1d9ccef,123632,sprt,HistPruneSoft=true,HistPruneSoft=false,"4+0.04, server conc 16, bench 111055",,,,,,,,,,-12.51 +/- 9.66 over 2000 games,,,"server_sprt summary 2026-11-26, 0 time losses"
+2026-11-26,1d9ccef,123632,sprt,ContHist (with HistBonus2)=true,ContHist (with HistBonus2)=false,"4+0.04, server conc 16, bench 111055",,,,,,,,,,+8.34 +/- 9.70 over 2000 games,,,"server_sprt summary 2026-11-26, 0 time losses"
