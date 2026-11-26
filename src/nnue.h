@@ -5,7 +5,8 @@
 #include <vector>
 
 // Net inference. File formats are written by nnue/export.py:
-//   version 1: N1 / N1-WDL (arch 1 / 2): 768 -> L1 per perspective, SCReLU, concat -> head (1 scalar or 3 W/D/L logits).
+//   version 1: N1 / N1-WDL (arch 1 / 2): 768 -> L1 per perspective, SCReLU, concat -> head (1 scalar, 3 W/D/L logits,
+//              or 4 = dual head [expected-score logit, W, D, L]).
 //   version 2: N2 / N3 (arch 3 / 4): 8 mirrored king buckets x 768 -> L1, SCReLU, concat -> K expert stacks
 //              (2*L1 -> L2 -> L3 -> head) chosen by no router (K = 1), piece count, or a learned top-1 router.
 // ".nnuef" is float32 (parity with PyTorch), ".nnue" quantised: L1 int16 (QA = 255); v1 output int16 (QB = 64);
@@ -23,6 +24,7 @@ constexpr int MAX_L1 = 1024;
 constexpr int N_BUCKETS = 8;
 constexpr int N_LAYOUTS = 2 * N_BUCKETS;   // bucket x mirrored
 constexpr int N_SCALARS = 4;
+constexpr int MAX_HEADS = 4;              // output buffers passed to forward()/output() need this many floats
 enum Router { ROUTER_NONE = 0, ROUTER_COUNT = 1, ROUTER_LEARNED = 2 };
 
 struct Net {
@@ -42,10 +44,12 @@ struct Net {
     std::string path;
 
     bool load(const std::string& path, std::string* err = nullptr);
+    bool load_bytes(const char* data, size_t size, const std::string& name, std::string* err = nullptr);
     void finalize();      // derived flags after the weights are filled in (load calls it; tests that build nets too)
-    bool wdl() const { return heads == 3; }
+    bool wdl() const { return heads == 3 || heads == 4; }      // has W/D/L outputs
+    bool dual() const { return heads == 4; }                  // scalar search head + W/D/L head
     int inputs() const { return version == 2 ? N_BUCKETS * FEATURES : FEATURES; }
-    // Raw head outputs (logits): 1 value (scalar) or 3 (W, D, L), from the side to move's view.
+    // Raw head outputs (logits), side to move's view: 1 (scalar), 3 (W, D, L) or 4 (scalar, W, D, L).
     void forward(const Position& pos, float* out) const;
 };
 
@@ -90,7 +94,7 @@ inline int feature(Color persp, Piece p, int sq) {
 // Router scalars: [phase, material balance / 10 (side to move), rule50 / 100, side to move is black].
 void scalars(const Position& pos, float* sc);
 
-// W/D/L probabilities from head logits (softmax). For a scalar head, D = 0 and W = sigmoid(out).
+// W/D/L probabilities from head logits (softmax over the W/D/L logits). Scalar head: D = 0, W = sigmoid(out).
 void wdl_probs(const float* logits, int heads, double* wdl);
 
 // Compare a net against reference outputs (jsonl with "fen" and "out"); prints the max/mean abs error.

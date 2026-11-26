@@ -48,7 +48,8 @@ Extra commands: `bench [depth] [net] [verbose]`, `verifynet <net> <ref.jsonl> [l
 `.nnue` (quantised, magic "NNUEWDL1") and `.nnuef` (float32, magic "NNUEFLT1"), little endian, sha256 trailer.
 Scale: QA = 255, QB = 64. Full layouts in the docstring of `nnue/export.py`.
 - Version 1 (N1 = arch 1, N1-WDL = arch 2): u32 version, arch, L1, buckets = 1, heads | i16 ft_w[768][L1] | i16 ft_b |
-  i16 out_w[heads][2*L1] | i32 out_b[heads].
+  i16 out_w[heads][2*L1] | i32 out_b[heads]. heads = 1 (scalar), 3 (W, D, L) or 4 (dual: scalar, W, D, L; the engine
+  searches with the scalar output and shifts it by u(W + d*D) - u(W + D/2) when the draw weight d != 0.5).
 - Version 2 (N2 = arch 3, N3 = arch 4): u32 version, arch, L1, buckets = 8, heads, L2, L3, K, router (0 none, 1 piece
   count, 2 learned) | i16 ft_w[8*768][L1] | i16 ft_b | i8 l2_w[K*L2][2*L1] | f32 l2_b, l3_w, l3_b, out_w, out_b |
   (router 2: i8 r_w[K][2*L1], f32 r_s[K][4], f32 r_b[K]).

@@ -8,6 +8,7 @@
 #include "nnue.h"
 #include <random>
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -187,7 +188,7 @@ static NNUE::Net random_net(int l1, int heads, bool big_out, unsigned seed) {
     std::mt19937 rng(seed);
     std::uniform_int_distribution<int> fw(-300, 300), fb(0, 200), ow(big_out ? -400 : -120, big_out ? 400 : 120);
     NNUE::Net n;
-    n.l1 = l1; n.heads = heads; n.arch = heads == 3 ? 2 : 1; n.quantized = true;
+    n.l1 = l1; n.heads = heads; n.arch = heads == 1 ? 1 : 2; n.quantized = true;
     n.q_ft_w.resize(size_t(NNUE::FEATURES) * l1); n.q_ft_b.resize(l1); n.q_out_w.resize(size_t(heads) * 2 * l1); n.q_out_b.resize(heads);
     for (auto& w : n.q_ft_w) w = int16_t(fw(rng));
     for (auto& b : n.q_ft_b) b = int16_t(fb(rng));
@@ -225,7 +226,7 @@ static NNUE::Net random_net_v2(int l1, int heads, int k, int router, unsigned se
 // Incremental accumulators (diffed along every perft path) and the SIMD output must equal the scalar full refresh
 // exactly: everything is integer arithmetic.
 static int nnue_walk(const NNUE::Net& net, const Position& p, const NNUE::Accumulator& acc, int d, NNUE::Finny* finny = nullptr) {
-    float a[3], b[3], c[3];
+    float a[NNUE::MAX_HEADS], b[NNUE::MAX_HEADS], c[NNUE::MAX_HEADS];
     net.forward(p, a);
     NNUE::output(net, acc, p, b, true);
     NNUE::output(net, acc, p, c, false);
@@ -253,8 +254,8 @@ static void test_nnue() {
                           "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
                           "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
                           "rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3"};
-    for (int variant = 0; variant < 3; ++variant) {
-        NNUE::Net net = random_net(variant == 2 ? 64 : 256, variant == 0 ? 1 : 3, variant == 1, 7 + variant);
+    for (int variant = 0; variant < 4; ++variant) {      // scalar, W/D/L (big out weights), W/D/L, dual head
+        NNUE::Net net = random_net(variant == 2 ? 64 : 256, variant == 0 ? 1 : variant == 3 ? 4 : 3, variant == 1, 7 + variant);
         CHECK(net.fast_out == (variant != 1), "fast_out flag variant %d", variant);
         int bad = 0;
         for (const char* f : fens) {
@@ -289,7 +290,7 @@ static void test_nnue() {
         Position a, b;
         a.set_fen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1");
         b.set_fen("8/5p2/4p3/r5PK/k1p3R1/8/1P1P4/8 w - - 0 1");
-        float oa[3], ob[3];
+        float oa[NNUE::MAX_HEADS], ob[NNUE::MAX_HEADS];
         net.forward(a, oa); net.forward(b, ob);
         CHECK(oa[0] == ob[0] && oa[1] == ob[1] && oa[2] == ob[2], "v2 mirror symmetry");
     }
@@ -310,6 +311,23 @@ static void test_nnue() {
     Move m3 = s.think(p, {}, l, false);
     CHECK(m3 && p.is_legal(m3) && std::abs(s.draw_weight() - 0.65) < 1e-9, "D1 search");
     s.set_net(nullptr);
+    {   // dual head: neutral utility evaluates exactly with the scalar head; d != 0.5 shifts it by the W/D/L utility
+        NNUE::Net dual = random_net(128, 4, false, 123);
+        CHECK(dual.dual() && dual.wdl(), "dual head flags");
+        Searcher sd;
+        sd.set_net(&dual);
+        Position q; q.set_fen("r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3");
+        float o[NNUE::MAX_HEADS];
+        dual.forward(q, o);
+        int expect = std::clamp(int(std::lround(400.0 * o[0])), -10000, 10000);
+        CHECK(sd.static_eval(q) == expect, "dual neutral eval %d vs %d", sd.static_eval(q), expect);
+        Limits ld; ld.depth = 6;
+        sd.opt.d1_utility = true; sd.opt.draw_value = 700;
+        sd.new_game(); sd.stop = false;
+        Move md = sd.think(q, {}, ld, false);
+        CHECK(md && q.is_legal(md), "dual head D1 search");
+        sd.set_net(nullptr);
+    }
 }
 
 int main(int argc, char** argv) {

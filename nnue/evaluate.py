@@ -35,11 +35,14 @@ def score(models: dict, paths, batch=16384, max_records=0, device="cpu"):
             if m.head == 1:
                 p = torch.sigmoid(out)
             else:
-                logp = F.log_softmax(out, dim=1)
+                # dual head: W/D/L metrics from out[:, 1:4]; the expected-score metrics use the scalar head
+                logp = F.log_softmax(out[:, 1:4] if m.head == 4 else out, dim=1)
                 pr = logp.exp()
                 p = pr[:, 0] + 0.5 * pr[:, 1]
                 acc[k]["wdl_logloss"] += float(-(t * logp).sum(1).sum())
                 acc[k]["wdl_brier"] += float(((pr - t) ** 2).sum(1).sum())
+                if m.head == 4:
+                    p = torch.sigmoid(out[:, 0])
             p = p.clamp(1e-6, 1 - 1e-6)
             acc[k]["escore_bce"] += float(-(e * p.log() + (1 - e) * (1 - p).log()).sum())
             acc[k]["escore_brier"] += float(((p - e) ** 2).sum())
@@ -51,7 +54,7 @@ def score(models: dict, paths, batch=16384, max_records=0, device="cpu"):
     for k, a in acc.items():
         n = max(a["n"], 1)
         out[k] = {"records": a["n"], "escore_bce": a["escore_bce"] / n, "escore_brier": a["escore_brier"] / n}
-        if models[k].head == 3:
+        if models[k].head in (3, 4):
             out[k].update(wdl_logloss=a["wdl_logloss"] / n, wdl_brier=a["wdl_brier"] / n)
     return out
 

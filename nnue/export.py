@@ -36,6 +36,9 @@ def _weights(model: NNUE):
     ft_b = model.ft_bias.detach().cpu().numpy().astype(np.float32)
     out_w = model.out.weight.detach().cpu().numpy().astype(np.float32)               # (heads, 2N)
     out_b = model.out.bias.detach().cpu().numpy().astype(np.float32)
+    if model.head == 4:                                                             # dual: [scalar, W, D, L]
+        out_w = np.concatenate([model.out_es.weight.detach().cpu().numpy().astype(np.float32), out_w])
+        out_b = np.concatenate([model.out_es.bias.detach().cpu().numpy().astype(np.float32), out_b])
     return ft_w, ft_b, out_w, out_b
 
 
@@ -79,7 +82,7 @@ def export_net(model, out_dir: str) -> dict:
         return export_net_v2(model, out_dir)
     os.makedirs(out_dir, exist_ok=True)
     ft_w, ft_b, out_w, out_b = _weights(model)
-    arch = 1 if model.head == 1 else 2
+    arch = 1 if model.head == 1 else 2       # dual (4 heads) keeps arch 2; the head count tells them apart
     hdr = lambda magic: magic + struct.pack("<5I", 1, arch, model.n, 1, model.head)   # noqa: E731
     q_ft_w = np.clip(np.round(ft_w * QA), -32768, 32767).astype("<i2")
     q_ft_b = np.clip(np.round(ft_b * QA), -32768, 32767).astype("<i2")
@@ -122,8 +125,8 @@ def load_checkpoint_model(path: str):
         m = NNUE2(n, state["out_w"].shape[1], l2, l3, k, router, cfg.get("balance", 0.01))
         m.load_state_dict(state)
         return m
-    head = state["out.weight"].shape[0]
-    m = NNUE(n, head)
+    head = 4 if "out_es.weight" in state else state["out.weight"].shape[0]
+    m = NNUE(n, head, bool(cfg.get("wdl_detach") or 0), cfg.get("wdl_weight") or 1.0)
     m.load_state_dict(state)
     return m
 

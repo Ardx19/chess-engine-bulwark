@@ -66,7 +66,7 @@ No net has been trained yet; the NNUE, defense-study and N2/N3 results are the n
 |---|---|---|
 | `Hash`, `Move Overhead`, `UCI_Chess960`, `SyzygyPath` | 16, 10, false, empty | standard |
 | `Threads` | 1 | fixed at 1 |
-| `EvalFile` | empty | `.nnue` (quantised, for play) or `.nnuef` (float, parity only); empty = handcrafted eval |
+| `EvalFile` | `<default>` | `<default>` = the net built into the binary (N1, `nets/n1/net-169b57d7.nnue`; set with CMake `-DBULWARK_NET=`); a path to a `.nnue` (quantised, for play) or `.nnuef` (float, parity only); `none` = handcrafted eval |
 | `Aspiration` `RFP` `NMP` `LMR` `KillersHistory` `LMPFutility` `IIR` `Improving` `SEEPrune` `TMScaling` | true | ladder switches |
 | `D3_Rule50Scale`, `D4_Syzygy`, `D5_StalemateGuard` | true | defense switches measured above |
 | `D1_WDLUtility` + `DrawValue` (per mille) | false, 500 | utility `U = W + d·D` with `d = DrawValue` (opponent nodes use `1 − d`); in-tree draws score `400·logit(d)` |
@@ -74,8 +74,9 @@ No net has been trained yet; the NNUE, defense-study and N2/N3 results are the n
 | `D6_PerpetualSeek` | false | quiet checks at the first qsearch ply when far below alpha (experimental) |
 | `D7_FortressDetect` | false | flat large score with no zeroing move in the PV halves the distance to the draw score (experimental) |
 | `UCI_ShowWDL` | false | net W/D/L at the end of the PV in `info` lines (WDL nets) |
+| `WDLScale` | 100 | percent scale of W/D/L-net utilities (and the draw score) on the search scale |
 
-Extra commands: `bench [depth] [net] [verbose]` (also from the shell), `eval`, `d`, `perft <depth>`,
+Extra commands: `bench [depth] [net|none] [verbose]` (also from the shell), `eval`, `d`, `perft <depth>`,
 `verifynet <net> <ref.jsonl> [limit]`, `go ... searchmoves ...`.
 
 ## Evaluation nets

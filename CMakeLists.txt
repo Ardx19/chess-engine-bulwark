@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(chess_engine C CXX)
+project(chess_engine C CXX ASM)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -38,6 +38,20 @@ endif()
 
 add_executable(bulwark src/main.cpp)
 target_link_libraries(bulwark core)
+
+# Default evaluation net, embedded in the binary (EvalFile overrides it; EvalFile=none selects the handcrafted eval).
+# Configure with -DBULWARK_NET= (empty) to build without one.
+set(BULWARK_NET "${CMAKE_SOURCE_DIR}/nets/n1/net-169b57d7.nnue" CACHE FILEPATH "net embedded as the default evaluation")
+if(BULWARK_NET)
+  if(NOT EXISTS "${BULWARK_NET}")
+    message(FATAL_ERROR "BULWARK_NET not found: ${BULWARK_NET}")
+  endif()
+  configure_file(src/embedded_net.S.in ${CMAKE_BINARY_DIR}/embedded_net.S @ONLY)
+  set_source_files_properties(${CMAKE_BINARY_DIR}/embedded_net.S PROPERTIES OBJECT_DEPENDS "${BULWARK_NET}")
+  target_sources(bulwark PRIVATE ${CMAKE_BINARY_DIR}/embedded_net.S)
+  get_filename_component(BULWARK_NET_NAME "${BULWARK_NET}" NAME)
+  target_compile_definitions(bulwark PRIVATE BULWARK_EMBEDDED_NET="${BULWARK_NET_NAME}")
+endif()
 
 add_executable(perft tools/perft_main.cpp)
 target_link_libraries(perft core)

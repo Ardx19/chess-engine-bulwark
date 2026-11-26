@@ -1,6 +1,9 @@
 """N1 / N1-WDL: 768 -> N (shared by both perspectives), SCReLU, concat(us, them) -> head (1 scalar logit or 3 W/D/L logits).
 
 Scalar head: p = sigmoid(out), engine units u = 400 * out.  WDL head: softmax over [W, D, L] logits.
+Dual head (head = 4): [expected-score logit, W, D, L]. The scalar output is trained exactly like N1 and is the engine's
+search eval; the W/D/L outputs feed the draw-aware utility. With wdl_detach the W/D/L layer is a read-out of the
+trunk that sends no gradient into it, so the trunk trains as in N1.
 """
 from __future__ import annotations
 
@@ -15,12 +18,17 @@ WEIGHT_CLAMP = 1.98   # first-layer weights stay inside int16 range after the QA
 
 
 class NNUE(nn.Module):
-    def __init__(self, n: int = 256, head: int = 1):
+    def __init__(self, n: int = 256, head: int = 1, wdl_detach: bool = False, wdl_weight: float = 1.0):
         super().__init__()
-        self.n, self.head = n, head
+        assert head in (1, 3, 4)
+        self.n, self.head, self.wdl_detach, self.wdl_weight = n, head, bool(wdl_detach), float(wdl_weight)
         self.ft = nn.EmbeddingBag(PAD + 1, n, mode="sum", padding_idx=PAD)
         self.ft_bias = nn.Parameter(torch.zeros(n))
-        self.out = nn.Linear(2 * n, head)
+        if head == 4:
+            self.out_es = nn.Linear(2 * n, 1)
+            self.out = nn.Linear(2 * n, 3)
+        else:
+            self.out = nn.Linear(2 * n, head)
         nn.init.normal_(self.ft.weight, std=0.05)
         with torch.no_grad():
             self.ft.weight[PAD].zero_()
@@ -33,6 +41,8 @@ class NNUE(nn.Module):
         a = self.ft(us) + self.ft_bias
         b = self.ft(them) + self.ft_bias
         x = torch.cat([self.screlu(a), self.screlu(b)], dim=1)
+        if self.head == 4:
+            return torch.cat([self.out_es(x), self.out(x.detach() if self.wdl_detach else x)], dim=1)
         o = self.out(x)
         return o.squeeze(1) if self.head == 1 else o
 
@@ -41,13 +51,24 @@ class NNUE(nn.Module):
         self.ft.weight.clamp_(-WEIGHT_CLAMP, WEIGHT_CLAMP)
         self.ft.weight[PAD].zero_()
         self.out.weight.clamp_(-WEIGHT_CLAMP, WEIGHT_CLAMP)
+        if self.head == 4:
+            self.out_es.weight.clamp_(-WEIGHT_CLAMP, WEIGHT_CLAMP)
 
 
 def loss_fn(model: NNUE, out, target, escore, alpha: float = 0.0):
-    """Scalar: MSE(sigmoid(out), expected score). WDL: soft cross-entropy + alpha * (expected score error)^2."""
+    """Scalar: MSE(sigmoid(out), expected score). WDL: soft cross-entropy + alpha * (expected score error)^2.
+    Dual: scalar loss on out[:, 0] + wdl_weight * WDL loss on out[:, 1:4]."""
     aux = getattr(model, "aux_loss", 0.0)
     if model.head == 1:
         return F.mse_loss(torch.sigmoid(out), escore) + aux
+    if model.head == 4:
+        scalar = F.mse_loss(torch.sigmoid(out[:, 0]), escore)
+        logp = F.log_softmax(out[:, 1:4], dim=1)
+        wdl = -(target * logp).sum(dim=1).mean()
+        if alpha:
+            p = logp.exp()
+            wdl = wdl + alpha * ((p[:, 0] + 0.5 * p[:, 1] - escore) ** 2).mean()
+        return scalar + model.wdl_weight * wdl + aux
     logp = F.log_softmax(out, dim=1)
     ce = -(target * logp).sum(dim=1).mean()
     if alpha:
@@ -65,6 +86,7 @@ def metrics(model: NNUE, out, target, escore):
         ll = -(escore * p.log() + (1 - escore) * (1 - p).log()).mean()
         brier = ((p - escore) ** 2).mean()
     else:
+        out = out[:, 1:4] if model.head == 4 else out           # dual: W/D/L metrics (comparable with N1-WDL)
         p = F.softmax(out, dim=1)
         ll = -(target * F.log_softmax(out, dim=1)).sum(dim=1).mean()
         brier = ((p - target) ** 2).sum(dim=1).mean()
@@ -158,7 +180,7 @@ class NNUE2(nn.Module):
 def build_model(cfg: dict) -> nn.Module:
     arch = cfg.get("arch", "n1")
     if arch == "n1":
-        return NNUE(cfg["n"], cfg["head"])
+        return NNUE(cfg["n"], cfg["head"], bool(cfg.get("wdl_detach") or 0), cfg.get("wdl_weight") or 1.0)
     return NNUE2(cfg["n"], cfg["head"], cfg.get("l2", 16), cfg.get("l3", 32), cfg.get("k", 1),
                  cfg.get("router", "none"), cfg.get("balance", 0.01))
 

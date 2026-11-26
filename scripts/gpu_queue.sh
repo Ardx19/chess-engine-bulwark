@@ -66,6 +66,8 @@ args_for() {   # run name -> trainer arguments (positions seen = steps x BATCH)
     sanity)    echo "--arch n1 --n 256 --head 3 --alpha 0.1 --steps $(S 2000)" ;;          # on the pilot data
     n1)        echo "--arch n1 --n 256 --head 1 --steps $(S 60000)" ;;                    # ~1.0B positions
     n1wdl)     echo "--arch n1 --n 256 --head 3 --alpha 0.1 --steps $(S 60000)" ;;        # ~1.0B
+    n1dual)    echo "--arch n1 --n 256 --head 4 --wdl-detach 1 --steps $(S 60000)" ;;    # scalar trained as N1 + W/D/L read-out
+    n1dual_joint) echo "--arch n1 --n 256 --head 4 --wdl-weight 0.25 --steps $(S 60000)" ;;  # both heads shape the trunk
     n2)        echo "--arch n2 --n 512 --head 3 --alpha 0.1 --steps $(S 110000)" ;;       # ~1.8B
     n3count)   echo "--arch n3 --n 512 --head 3 --alpha 0.1 --k 8 --router count --steps $(S 45000) --init-from $CKPT/run-n2/final.pt" ;;      # ~0.74B
     n3learned) echo "--arch n3 --n 512 --head 3 --alpha 0.1 --k 8 --router learned --balance 0.01 --steps $(S 45000) --init-from $CKPT/run-n2/final.pt" ;;
@@ -91,7 +93,8 @@ for run in $RUNS; do
   if grep -q '"stopped_by_signal": true' "$LOGS/$run.log"; then log "stopped $run by signal; rerun to resume"; exit 0; fi
   if grep -q '"complete": false' "$LOGS/$run.log"; then log "stopped $run before its last step (TRAIN_STOP_AT); rerun to resume"; exit 0; fi
   ref=$(ls "$root"/val/*.bin | head -1)
-  "${LOW[@]}" python3 -m nnue.export "$CKPT/run-$run/final.pt" "$NETS/$run" --ref-shard "$ref" --ref-n 10000 >> "$LOGS/$run.log" 2>&1
+  ck="$CKPT/run-$run/best.pt"; [ -e "$ck" ] || ck="$CKPT/run-$run/final.pt"   # best validation checkpoint (N2 overfit lesson)
+  "${LOW[@]}" python3 -m nnue.export "$ck" "$NETS/$run" --ref-shard "$ref" --ref-n 10000 >> "$LOGS/$run.log" 2>&1
   if [ -x build/bulwark ]; then
     for f in "$NETS/$run"/net-*.nnuef "$NETS/$run"/net-*.nnue; do
       echo "verifynet $f $(ls "$NETS/$run"/ref-*.jsonl | head -1)" | "${LOW[@]}" build/bulwark | grep verifynet | tee -a "$LOGS/$run.log"
@@ -102,7 +105,11 @@ for run in $RUNS; do
 done
 
 if [ -d "$DATA/test" ]; then
-  finals=$(ls "$CKPT"/run-{n1,n1wdl,n2,n3count,n3learned}/final.pt 2>/dev/null || true)
+  finals=""
+  for r in $RUNS; do                        # the checkpoint each run exported (best if present)
+    if [ -e "$CKPT/run-$r/best.pt" ]; then finals="$finals $CKPT/run-$r/best.pt"
+    elif [ -e "$CKPT/run-$r/final.pt" ]; then finals="$finals $CKPT/run-$r/final.pt"; fi
+  done
   if [ -n "$finals" ]; then
     log "teacher agreement on the test split"
     # shellcheck disable=SC2086

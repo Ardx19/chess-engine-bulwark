@@ -11,6 +11,11 @@
 #include <sstream>
 #include <thread>
 
+#ifdef BULWARK_EMBEDDED_NET
+extern "C" const char bulwark_net_data[];
+extern "C" const char bulwark_net_end[];
+#endif
+
 namespace {
 
 struct Engine {
@@ -20,12 +25,24 @@ struct Engine {
     std::thread worker;
     std::unique_ptr<NNUE::Net> net;   // null = handcrafted eval
 
-    // Load (or clear, for an empty path) the evaluation net. On failure the previous evaluation stays in use.
-    bool load_net(const std::string& path) {
-        if (path.empty() || path == "<empty>") { searcher.set_net(nullptr); net.reset(); return true; }
+    // Load the evaluation net. "<default>" = the net embedded at build time (handcrafted eval if there is none);
+    // "none", "<empty>" or "" = handcrafted eval. On failure the previous evaluation stays in use.
+    bool load_net(const std::string& path, bool quiet = false) {
+        if (path.empty() || path == "<empty>" || path == "none") { searcher.set_net(nullptr); net.reset(); return true; }
         auto n = std::make_unique<NNUE::Net>();
         std::string err;
-        if (!n->load(path, &err)) { std::printf("info string EvalFile %s: %s\n", path.c_str(), err.c_str()); return false; }
+        bool ok;
+        if (path == "<default>") {
+#ifdef BULWARK_EMBEDDED_NET
+            ok = n->load_bytes(bulwark_net_data, size_t(bulwark_net_end - bulwark_net_data), BULWARK_EMBEDDED_NET, &err);
+#else
+            searcher.set_net(nullptr); net.reset(); return true;
+#endif
+        } else {
+            ok = n->load(path, &err);
+        }
+        if (!ok) { std::printf("info string EvalFile %s: %s\n", path.c_str(), err.c_str()); return false; }
+        if (quiet) { searcher.set_net(n.get()); net = std::move(n); return true; }
         std::printf("info string EvalFile %s: arch %d, L1 %d, %s head, %s%s\n", path.c_str(), n->arch, n->l1,
                     n->wdl() ? "W/D/L" : "scalar", n->quantized ? "quantised" : "float (slow, parity only)",
                     n->quantized && !n->fast_out ? ", scalar output kernel" : "");
@@ -34,7 +51,7 @@ struct Engine {
         return true;
     }
 
-    Engine() { pos.set_fen(Position::START_FEN); }
+    Engine() { pos.set_fen(Position::START_FEN); load_net("<default>", true); }
     void join() { if (worker.joinable()) worker.join(); }
 
     void set_position(std::istringstream& is) {
@@ -139,7 +156,7 @@ struct Engine {
                 std::puts("option name DefenseLossThreshold type spin default 400 min 0 max 1000");
                 std::puts("option name WDLScale type spin default 100 min 10 max 400");
                 std::puts("option name SyzygyPath type string default <empty>");
-                std::puts("option name EvalFile type string default <empty>");
+                std::puts("option name EvalFile type string default <default>");
                 std::puts("uciok");
             } else if (cmd == "isready") std::puts("readyok");
             else if (cmd == "ucinewgame") { join(); searcher.new_game(); }
@@ -161,7 +178,7 @@ struct Engine {
                 join();
                 std::printf("hce %d (side to move)\n", Eval::evaluate(pos));
                 if (net) {
-                    float out[3]; double p[3];
+                    float out[NNUE::MAX_HEADS]; double p[3];
                     net->forward(pos, out);
                     NNUE::wdl_probs(out, net->heads, p);
                     std::printf("nnue %d (side to move, neutral) logits", searcher.static_eval(pos));
@@ -183,7 +200,7 @@ int main(int argc, char** argv) {
     Bitboards::init();
     Zobrist::init();
     Engine e;
-    if (argc > 1 && std::string(argv[1]) == "bench") {   // bench [depth] [evalfile] [verbose]
+    if (argc > 1 && std::string(argv[1]) == "bench") {   // bench [depth] [evalfile|none|-] [verbose]
         if (argc > 3 && std::string(argv[3]) != "-" && !e.load_net(argv[3])) return 1;
         run_bench(e.searcher, argc > 2 ? std::atoi(argv[2]) : 6, argc > 4);
         return 0;

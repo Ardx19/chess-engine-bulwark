@@ -262,6 +262,44 @@ class Training(unittest.TestCase):
             self.assertLess(errs["float"], 1e-4, name)
             self.assertLess(errs["quantized"], 0.25, f"{name}: {errs}")
 
+    def test_dual_head_train_export_parity(self):
+        """Dual head (scalar + W/D/L): trains, exports as 4 heads, and the engine reproduces it; the detached W/D/L
+        read-out sends no gradient into the trunk, so the trunk trains exactly as a scalar net."""
+        import subprocess
+        import torch
+        from nnue.model import NNUE, loss_fn
+        from nnue.train import train
+        from nnue.export import export_net, load_checkpoint_model, write_reference
+        m = NNUE(16, 4, wdl_detach=True)
+        us, them = torch.randint(0, 768, (8, 12)), torch.randint(0, 768, (8, 12))
+        out = m(us, them)
+        self.assertEqual(tuple(out.shape), (8, 4))
+        target = torch.softmax(torch.randn(8, 3), dim=1)
+        m.zero_grad()
+        (torch.nn.functional.log_softmax(out[:, 1:4], 1) * target).sum().backward()      # W/D/L-only loss
+        self.assertTrue(m.ft.weight.grad is None or float(m.ft.weight.grad.abs().sum()) == 0.0)
+        self.assertGreater(float(m.out.weight.grad.abs().sum()), 0.0)
+        exe = os.path.join(ROOT, "build", "bulwark")
+        val = glob.glob(os.path.join(self.tmp, "val", "*.bin"))[0]
+        for name, kw in (("dual", dict(wdl_detach=1)), ("dualj", dict(wdl_weight=0.25))):
+            r = train(self.cfg(name, head=4, n=32, steps=30, lr=3e-3, **kw), resume="none")
+            mm = load_checkpoint_model(r["final"])
+            self.assertEqual(mm.head, 4)
+            self.assertEqual(mm.wdl_detach, bool(kw.get("wdl_detach", 0)))
+            info = export_net(mm, os.path.join(self.tmp, f"nets_{name}"))
+            ref = os.path.join(self.tmp, f"ref_{name}.jsonl")
+            write_reference(mm, val, ref, 300)
+            self.assertEqual(len(json.loads(open(ref).readline())["out"]), 4)
+            if not os.path.exists(exe):
+                continue
+            errs = {}
+            for kind in ("float", "quantized"):
+                res = subprocess.run([exe], input=f"verifynet {info[kind]} {ref}\nquit\n", capture_output=True, text=True).stdout
+                line = [l for l in res.splitlines() if l.startswith("verifynet")][0]
+                errs[kind] = float(line.split("max abs error ")[1].split(",")[0])
+            self.assertLess(errs["float"], 1e-4, name)
+            self.assertLess(errs["quantized"], 0.15, f"{name}: {errs}")
+
     def test_upcycled_experts_start_equal_to_dense(self):
         import torch
         from nnue.model import NNUE2

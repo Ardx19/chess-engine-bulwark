@@ -42,6 +42,8 @@ def parse_duration(s: str) -> float:
 def config_hash(cfg: dict) -> str:
     # N1 runs hash exactly as before the N2/N3 fields existed (their defaults are left out).
     keys = HASHED if cfg.get("arch", "n1") != "n1" else HASHED[:9]
+    if cfg.get("head") == 4:
+        keys = tuple(keys) + ("wdl_detach", "wdl_weight")
     return hashlib.sha256(json.dumps({k: cfg.get(k) for k in keys}, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -202,7 +204,7 @@ def train(cfg: dict, resume: str = "auto") -> dict:
             "complete": step >= cfg["steps"]}
 
 
-DEFAULTS = dict(run_id="dev", ckpt_dir="ckpt", loader_workers=0, arch="n1", l2=16, l3=32, k=1, router="none", balance=0.01, init_from=None,
+DEFAULTS = dict(run_id="dev", ckpt_dir="ckpt", loader_workers=0, wdl_detach=0, wdl_weight=1.0, arch="n1", l2=16, l3=32, k=1, router="none", balance=0.01, init_from=None,
                 n=256, head=1, lr=1e-3, weight_decay=0.0, batch_size=4096, steps=1000,
                 warmup=100, seed=1, blend=[0.6, 0.25, 0.15], alpha=0.0, val_every=200, ckpt_every_s=1200,
                 ckpt_every_steps=0, deadline=None, train_glob="data/train/*.bin", val_glob=None, device=None)

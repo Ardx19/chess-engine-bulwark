@@ -20,19 +20,23 @@ constexpr float DEQ = 1.0f / (127.0f * QB);   // v2: x_q in 0..127, weights * QB
 }  // namespace
 
 bool Net::load(const std::string& file, std::string* err) {
-    auto fail = [&](const char* m) { if (err) *err = m; return false; };
     std::ifstream f(file, std::ios::binary);
-    if (!f) return fail("cannot open file");
+    if (!f) { if (err) *err = "cannot open file"; return false; }
     std::vector<char> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    if (data.size() < 12 + 32) return fail("file too small");
-    quantized = std::memcmp(data.data(), "NNUEWDL1", 8) == 0;
-    bool flt = std::memcmp(data.data(), "NNUEFLT1", 8) == 0;
+    return load_bytes(data.data(), data.size(), file, err);
+}
+
+bool Net::load_bytes(const char* data, size_t size, const std::string& name, std::string* err) {
+    auto fail = [&](const char* m) { if (err) *err = m; return false; };
+    if (size < 12 + 32) return fail("file too small");
+    quantized = std::memcmp(data, "NNUEWDL1", 8) == 0;
+    bool flt = std::memcmp(data, "NNUEFLT1", 8) == 0;
     if (!quantized && !flt) return fail("bad magic");
     size_t at = 8;
     bool ok = true;
     auto take = [&](void* dst, size_t bytes) {
-        if (!ok || at + bytes > data.size()) { ok = false; return; }
-        std::memcpy(dst, data.data() + at, bytes);
+        if (!ok || at + bytes > size) { ok = false; return; }
+        std::memcpy(dst, data + at, bytes);
         at += bytes;
     };
     auto vec = [&](auto& v, size_t n) { v.resize(n); take(v.data(), n * sizeof(v[0])); };
@@ -42,7 +46,7 @@ bool Net::load(const std::string& file, std::string* err) {
         uint32_t h[4];
         take(h, 16);
         arch = int(h[0]); l1 = int(h[1]); heads = int(h[3]);
-        if (h[2] != 1 || l1 <= 0 || (heads != 1 && heads != 3)) return fail("unsupported architecture");
+        if (h[2] != 1 || l1 <= 0 || (heads != 1 && heads != 3 && heads != 4)) return fail("unsupported architecture");
         size_t n_ft = size_t(FEATURES) * l1, n_ow = size_t(heads) * 2 * l1;
         if (quantized) { vec(q_ft_w, n_ft); vec(q_ft_b, l1); vec(q_out_w, n_ow); vec(q_out_b, heads); }
         else { vec(ft_w, n_ft); vec(ft_b, l1); vec(out_w, n_ow); vec(out_b, heads); }
@@ -67,10 +71,10 @@ bool Net::load(const std::string& file, std::string* err) {
         return fail("unsupported version");
     }
     if (!ok) return fail("file too small");
-    if (at + 32 != data.size()) return fail("size mismatch");
+    if (at + 32 != size) return fail("size mismatch");
     if (quantized && l1 > MAX_L1) return fail("L1 wider than MAX_L1");
     version = int(ver);
-    path = file;
+    path = name;
     finalize();
     return true;
 }
@@ -440,6 +444,7 @@ int expert_of(const Net& net, const Accumulator& acc, const Position& pos) {
 
 void wdl_probs(const float* z, int heads, double* p) {
     if (heads == 1) { p[0] = 1.0 / (1.0 + std::exp(-double(z[0]))); p[1] = 0; p[2] = 1 - p[0]; return; }
+    if (heads == 4) z += 1;                       // dual head: [scalar, W, D, L]
     double m = std::max({double(z[0]), double(z[1]), double(z[2])});
     double e0 = std::exp(z[0] - m), e1 = std::exp(z[1] - m), e2 = std::exp(z[2] - m), t = e0 + e1 + e2;
     p[0] = e0 / t; p[1] = e1 / t; p[2] = e2 / t;
@@ -474,7 +479,7 @@ double verify(const Net& net, const std::string& ref_jsonl, size_t limit) {
         if (!parse_line(line, fen, ref) || int(ref.size()) != net.heads) { std::printf("bad reference line %zu\n", n); return -1; }
         Position pos;
         if (!pos.set_fen(fen)) { std::printf("bad fen %s\n", fen.c_str()); return -1; }
-        float out[3];
+        float out[MAX_HEADS];
         net.forward(pos, out);
         for (int h = 0; h < net.heads; ++h) {
             double e = std::fabs(double(out[h]) - ref[h]);

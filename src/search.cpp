@@ -51,7 +51,7 @@ int Searcher::utility_units(const double* p, Color stm) const {
 int Searcher::evaluate(int ply) {
     const Position& pos = stack_[ply];
     if (!net_) return Eval::evaluate(pos);
-    float out[3];
+    float out[NNUE::MAX_HEADS];
     if (net_->quantized) {
         int q = ply;
         while (!acc_[q].computed) --q;                     // acc_[0] is refreshed at the root
@@ -62,7 +62,17 @@ int Searcher::evaluate(int ply) {
     }
     if (net_->heads == 1) return std::clamp(int(std::lround(400.0 * out[0])), -EVAL_CAP, EVAL_CAP);
     double p[3];
-    NNUE::wdl_probs(out, 3, p);
+    NNUE::wdl_probs(out, net_->heads, p);
+    if (net_->dual()) {
+        // Dual head: the scalar head is the search eval; a non-neutral draw weight shifts it by the utility change
+        // the W/D/L head implies, u(W + d*D) - u(W + D/2), so d = 0.5 is exactly the scalar net.
+        int base = int(std::lround(400.0 * out[0]));
+        if (d_ != 0.5) {
+            double neutral = std::clamp(p[0] + 0.5 * p[1], 1e-6, 1.0 - 1e-6);
+            base += utility_units(p, pos.stm) - int(std::lround(4.0 * opt.wdl_scale * std::log(neutral / (1.0 - neutral))));
+        }
+        return std::clamp(base, -EVAL_CAP, EVAL_CAP);
+    }
     return utility_units(p, pos.stm);
 }
 
@@ -92,10 +102,10 @@ bool Searcher::leaf_wdl(int* wdl) {
         if (!ok) break;
         p = p.make(pv_[0][i]);
     }
-    float out[3];
+    float out[NNUE::MAX_HEADS];
     double pr[3];
     net_->forward(p, out);
-    NNUE::wdl_probs(out, 3, pr);
+    NNUE::wdl_probs(out, net_->heads, pr);
     if (p.stm != root_stm_) std::swap(pr[0], pr[2]);
     for (int k = 0; k < 3; ++k) wdl[k] = int(std::lround(pr[k] * 1000));
     return true;
