@@ -23,3 +23,4 @@ date,commit,bench,kind,new,base,setting,games,wins,draws,losses,elo,elo_err,llr,
 2026-11-26,52d4e73,114249,netcheck,n1dual,n1 (169b57d7),"nodes=25000, 8moves_v3, SPRT [-5,0]",2000,731,591,678,9.21,12.36,1.15,"[-5.00, 0.00]",no verdict,,,results/dual-vs-n1-20261126-1119/n1dual.log,results/dual-vs-n1-20261126-1119
 2026-11-26,7e32e83,117911,sprt,ContHist=true,ContHist=false,"4+0.04, n1dual embedded",2000,509,980,511,-0.35,10.40,-0.25,"[0.00, 5.00]",no verdict,,,results/features/ContHist.log,neutral; history bonus depth^2 likely too small
 2026-11-26,7e32e83,121556,sprt,HistBonus2=true,HistBonus2=false,"4+0.04, ContHist on, n1dual",798,279,384,135,63.39,16.18,2.95,"[0.00, 5.00]",H1,,,results/features/HistBonus2.log,
+2026-11-26,153af76,111055,sprt,CaptHist=true,CaptHist=false,"4+0.04, HistBonus2 on, n1dual",2000,575,921,504,12.34,10.78,1.24,"[0.00, 5.00]",no verdict,,,results/features/CaptHist.log,

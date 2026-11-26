@@ -44,7 +44,8 @@ struct Options {
     bool see_prune = true;         // 9
     bool cont_hist = true;         // Phase 2.1: continuation history (1- and 2-ply) for ordering and LMR
     bool hist_bonus2 = true;       // Phase 2: +63 +/- 16 (798 g); linear history bonus min(170*d - 100, 1700) instead of d^2
-    bool capt_hist = false;        // Phase 2.2: capture history (piece, to, captured type) for capture ordering
+    bool hist_prune = false;       // Phase 2.3: prune quiets with very bad (main + continuation) history at low depth
+    bool capt_hist = true;         // Phase 2.2: +12.3 +/- 10.8 (2000 g); capture history (piece, to, captured type) for capture ordering
     bool tm_scaling = true;        // time management: node fraction + best-move stability
     bool d3_rule50 = true;         // D3: scale eval toward draw with the halfmove clock
     bool d5_stalemate = true;      // D5: stalemate guard in qsearch at low material

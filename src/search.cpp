@@ -31,6 +31,7 @@ bool* Options::flag(const std::string& n) {
     if (n == "ContHist") return &cont_hist;
     if (n == "CaptHist") return &capt_hist;
     if (n == "HistBonus2") return &hist_bonus2;
+    if (n == "HistPrune") return &hist_prune;
     if (n == "TMScaling") return &tm_scaling;
     if (n == "D3_Rule50Scale") return &d3_rule50;
     if (n == "D5_StalemateGuard") return &d5_stalemate;
@@ -372,6 +373,10 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
         if (prune_ok && legal > 1) {
             // 6. Late move pruning
             if (opt.lmp_futility && quiet && depth <= 8 && legal > (3 + depth * depth) * (1 + improving)) continue;
+            // History pruning: quiets whose history says they rarely work
+            if (opt.hist_prune && quiet && depth <= 4 && m != killers_[ply][0] && m != killers_[ply][1] &&
+                history_[pos.stm][m.from()][m.to()] + (opt.cont_hist ? cont_score(ply, pos.board[m.from()], m.to()) : 0) < -2048 * depth)
+                continue;
             // 9. SEE pruning
             if (opt.see_prune && depth <= 6 && !m.is_promo()) {
                 if (quiet ? !pos.see_ge(m, -25 * depth * depth) : !pos.see_ge(m, -90 * depth)) continue;
