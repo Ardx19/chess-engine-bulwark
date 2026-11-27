@@ -37,3 +37,4 @@ date,commit,bench,kind,new,base,setting,games,wins,draws,losses,elo,elo_err,llr,
 2026-11-27,6d76d92,123632,sprt,net-a573c497.nnue,net-9ed82c49.nnue,8+0.08 laptop conc 5,466,237,186,43,153.99,25.96,2.95,"[0.00, 5.00]",H1,,,results/sprt-n4-vs-n1dual-8+0.08/log.txt,time losses: 0
 2026-11-27,,,sprt,LmrCaptures=true,LmrCaptures=false,"4+0.04, server conc 16",2000,,,,-12.86,,-1.97,"[0.00, 5.00]",inconclusive,,,results/server_sprt/summary.txt (server),server batch 3; max games reached; stays off
 2026-11-27,,,sprt,DoubleExt=true,DoubleExt=false,"4+0.04, server conc 16",2000,,,,3.82,,0.34,"[0.00, 5.00]",inconclusive,,,results/server_sprt/summary.txt (server),server batch 3; max games reached; stays off (retest with N4 / SPSA)
+2026-11-27,a370c4c,111405,netcheck,net-fcab4618.nnue,net-a573c497.nnue,nodes=25000,2620,865,1061,694,22.71,10.11,2.95,"[0.00, 5.00]",H1,,,results/netcheck-n4w-vs-n4-25k/log.txt,
