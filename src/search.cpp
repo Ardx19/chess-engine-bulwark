@@ -1,6 +1,7 @@
 #include "search.h"
 #include "eval.h"
 #include "tablebase.h"
+#include "tune.h"
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
@@ -11,11 +12,18 @@ const int PieceVal[7] = {100, 320, 330, 500, 900, 0, 0};
 
 int LmrTable[64][64];
 struct LmrInit {
-    LmrInit() {
-        for (int d = 1; d < 64; ++d)
-            for (int m = 1; m < 64; ++m) LmrTable[d][m] = int(0.78 + std::log(d) * std::log(m) / 2.47);
-    }
+    LmrInit() { init_lmr(); }
 } lmr_init;
+
+int hist_bonus(int depth, bool linear) {
+    return linear ? std::min(Tune::HistMul * depth - Tune::HistSub, Tune::HistMax) : depth * depth;
+}
+}
+
+void init_lmr() {
+    for (int d = 1; d < 64; ++d)
+        for (int m = 1; m < 64; ++m)
+            LmrTable[d][m] = int(Tune::LmrBase / 100.0 + std::log(d) * std::log(m) / (Tune::LmrDiv / 100.0));
 }
 
 bool* Options::flag(const std::string& n) {
@@ -337,17 +345,17 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
 
     if (!PV && !in_check && !root && !excl) {
         // Razoring: hopeless at low depth -> verify with the capture search only
-        if (opt.razoring && depth <= 3 && eval + 250 * depth < alpha && not_mated_range) {
+        if (opt.razoring && depth <= 3 && eval + Tune::RazorMargin * depth < alpha && not_mated_range) {
             int v = qsearch(ply, alpha, alpha + 1);
             if (stopped_) return 0;
             if (v < alpha) return v;
         }
         // 2. Reverse futility pruning
-        if (opt.rfp && depth <= 8 && not_mated_range && eval - 80 * (depth - improving) >= beta) return eval;
+        if (opt.rfp && depth <= Tune::RfpDepth && not_mated_range && eval - Tune::RfpMargin * (depth - improving) >= beta) return eval;
         // 3. Null move pruning
         if (opt.nmp && depth >= 3 && !null_prev_[ply] && eval >= beta && not_mated_range &&
             pos.has_non_pawn_material(pos.stm)) {
-            int R = 3 + depth / 3 + std::min((eval - beta) / 200, 3);
+            int R = Tune::NmpBase + depth / Tune::NmpDepthDiv + std::min((eval - beta) / Tune::NmpEvalDiv, 3);
             stack_[ply + 1] = pos.make_null();
             cm_[ply] = nullptr;
             acc_[ply + 1].computed = false;
@@ -400,10 +408,10 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
     // is singular and gets one ply more; if even that search beats beta, cut (multi-cut); if the TT score alone
     // beats beta, reduce the TT move instead (negative extension).
     int sing_ext = 0;
-    if (opt.singular_ext && !root && !excl && tt_move && depth >= 7 && found && tte.depth >= depth - 3 &&
+    if (opt.singular_ext && !root && !excl && tt_move && depth >= Tune::SingDepth && found && tte.depth >= depth - 3 &&
         (tte.bound & BOUND_LOWER) && std::abs(tte.score) < DECISIVE && ply < 2 * root_depth_) {
         const int ttv = tte.score;
-        const int sbeta = ttv - 2 * depth;
+        const int sbeta = ttv - Tune::SingMargin * depth / 16;
         excluded_[ply] = tt_move;
         int v = search<false>(ply, (depth - 1) / 2, sbeta - 1, sbeta);
         excluded_[ply] = MOVE_NONE;
@@ -430,7 +438,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
 
         if (prune_ok && legal > 1) {
             // 6. Late move pruning
-            if (opt.lmp_futility && quiet && depth <= 8 && legal > (3 + depth * depth) * (1 + improving)) continue;
+            if (opt.lmp_futility && quiet && depth <= Tune::LmpDepth && legal > (Tune::LmpBase + depth * depth) * (1 + improving)) continue;
             // History pruning: quiets whose history says they rarely work
             if ((opt.hist_prune || opt.hist_prune_soft) && quiet && m != killers_[ply][0] && m != killers_[ply][1]) {
                 int h = history_[pos.stm][m.from()][m.to()] + (opt.cont_hist ? cont_score(ply, pos.board[m.from()], m.to()) : 0);
@@ -438,8 +446,8 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
                     continue;
             }
             // 9. SEE pruning
-            if (opt.see_prune && depth <= 6 && !m.is_promo()) {
-                if (quiet ? !pos.see_ge(m, -25 * depth * depth) : !pos.see_ge(m, -90 * depth)) continue;
+            if (opt.see_prune && depth <= Tune::SeeDepth && !m.is_promo()) {
+                if (quiet ? !pos.see_ge(m, -Tune::SeeQuiet * depth * depth) : !pos.see_ge(m, -Tune::SeeCapt * depth)) continue;
             }
         }
 
@@ -452,8 +460,8 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
         const bool gives_check = stack_[ply + 1].in_check();
 
         // 6. Futility pruning (needs to know the move does not give check)
-        if (prune_ok && legal > 1 && opt.lmp_futility && quiet && !gives_check && depth <= 7 &&
-            eval + 90 + 90 * depth <= alpha)
+        if (prune_ok && legal > 1 && opt.lmp_futility && quiet && !gives_check && depth <= Tune::FutDepth &&
+            eval + Tune::FutBase + Tune::FutMul * depth <= alpha)
             continue;
 
         int nd = depth - 1 + (gives_check ? 1 : 0) + (m == tt_move ? sing_ext : 0);
@@ -471,7 +479,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
                 r -= gives_check;
                 if (opt.killers_history) {
                     int hs = history_[pos.stm][m.from()][m.to()];
-                    if (opt.cont_hist) r -= std::clamp((hs + cont_score(ply, pos.board[m.from()], m.to())) / 8192, -2, 2);
+                    if (opt.cont_hist) r -= std::clamp((hs + cont_score(ply, pos.board[m.from()], m.to())) / Tune::LmrHistDiv, -2, 2);
                     else r -= std::clamp(hs / 4096, -2, 2);
                 }
                 r = std::clamp(r, 0, nd - 1);
@@ -499,7 +507,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
                 }
                 if (score >= beta) {
                     if (opt.capt_hist) {     // reward the refuting capture, penalise captures tried before it
-                        int cb = opt.hist_bonus2 ? std::min(170 * depth - 100, 1700) : depth * depth;
+                        int cb = hist_bonus(depth, opt.hist_bonus2);
                         auto upd = [&](Move c, int b) {
                             int16_t& h = capt_entry(pos, c);
                             b = std::clamp(b, -2000, 2000);
@@ -510,7 +518,7 @@ int Searcher::search(int ply, int depth, int alpha, int beta) {
                     }
                     if (quiet && opt.killers_history) {
                         if (killers_[ply][0] != m) { killers_[ply][1] = killers_[ply][0]; killers_[ply][0] = m; }
-                        int bonus = opt.hist_bonus2 ? std::min(170 * depth - 100, 1700) : depth * depth;
+                        int bonus = hist_bonus(depth, opt.hist_bonus2);
                         update_history(pos.stm, m, bonus);
                         for (int k = 0; k < nq - 1; ++k) update_history(pos.stm, quiets[k], -bonus);
                         if (opt.cont_hist) {
@@ -636,7 +644,7 @@ Move Searcher::think(const Position& root, const std::vector<U64>& history, cons
         root_depth_ = d;
         Move prev_best = best;
         // 1. Aspiration windows from depth 4
-        int delta = 25, alpha = -INF, beta = INF;
+        int delta = Tune::AspDelta, alpha = -INF, beta = INF;
         if (opt.aspiration && d >= 4 && std::abs(score) < DECISIVE) { alpha = score - delta; beta = score + delta; }
         int s;
         for (;;) {

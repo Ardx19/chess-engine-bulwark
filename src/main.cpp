@@ -4,6 +4,7 @@
 #include "nnue.h"
 #include "perft.h"
 #include "tablebase.h"
+#include "tune.h"
 #include <algorithm>
 #include <cstdio>
 #include <iostream>
@@ -131,6 +132,11 @@ struct Engine {
         else if (name == "WDLScale") searcher.opt.wdl_scale = std::clamp(std::stoi(value), 10, 400);
         else if (name == "DefenseLossThreshold") searcher.opt.defense_loss_threshold = std::clamp(std::stoi(value), 0, 1000);
         else if (bool* f = searcher.opt.flag(name)) *f = value == "true";
+#ifdef BULWARK_TUNE
+        else
+            for (auto& t : Tune::entries)
+                if (name == t.name) { *t.value = std::clamp(std::stoi(value), t.lo, t.hi); init_lmr(); }
+#endif
         // Threads is fixed at 1 (accepted and ignored).
     }
 
@@ -168,6 +174,10 @@ struct Engine {
                 std::puts("option name WDLScale type spin default 100 min 10 max 400");
                 std::puts("option name SyzygyPath type string default <empty>");
                 std::puts("option name EvalFile type string default <default>");
+#ifdef BULWARK_TUNE
+                for (auto& t : Tune::entries)
+                    std::printf("option name %s type spin default %d min %d max %d\n", t.name, t.def, t.lo, t.hi);
+#endif
                 std::puts("uciok");
             } else if (cmd == "isready") std::puts("readyok");
             else if (cmd == "ucinewgame") { join(); searcher.new_game(); }
@@ -197,6 +207,10 @@ struct Engine {
                     std::printf(" wdl %.3f %.3f %.3f\n", p[0], p[1], p[2]);
                 }
             }
+#ifdef BULWARK_TUNE
+            else if (cmd == "tunables")   // for scripts/spsa.py: name, current value, range, final perturbation size
+                for (auto& t : Tune::entries) std::printf("tunable %s %d %d %d %g\n", t.name, *t.value, t.lo, t.hi, t.c_end);
+#endif
             else if (cmd == "d") std::printf("%s\nkey %016llx\n", pos.fen(searcher.opt.chess960).c_str(), (unsigned long long)pos.key);
             std::fflush(stdout);
         }

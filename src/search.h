@@ -16,6 +16,8 @@ constexpr int TB_WIN = 20000;                      // tablebase win score, minus
 constexpr int DECISIVE = TB_WIN - MAX_PLY;       // |score| >= DECISIVE: forced mate or tablebase result
 constexpr int NO_EVAL = -INF - 1;
 
+void init_lmr();   // LMR table from the LmrBase / LmrDiv tunables (src/tune.h); call after changing them
+
 struct Limits {
     int depth = 0;                 // 0 = none
     uint64_t nodes = 0;            // 0 = none

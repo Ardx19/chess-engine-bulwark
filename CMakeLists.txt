@@ -35,6 +35,10 @@ set_source_files_properties(third_party/pyrrhic/tbprobe.c PROPERTIES COMPILE_FLA
 if(USE_PEXT)
   target_compile_definitions(core PUBLIC USE_PEXT)
 endif()
+option(BULWARK_TUNE "Tuning build: search constants (src/tune.h) become UCI spin options for SPSA" OFF)
+if(BULWARK_TUNE)
+  target_compile_definitions(core PUBLIC BULWARK_TUNE)
+endif()
 
 add_executable(bulwark src/main.cpp)
 target_link_libraries(bulwark core)
