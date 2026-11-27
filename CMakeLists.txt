@@ -40,8 +40,16 @@ add_executable(bulwark src/main.cpp)
 target_link_libraries(bulwark core)
 
 # Default evaluation net, embedded in the binary (EvalFile overrides it; EvalFile=none selects the handcrafted eval).
-# Configure with -DBULWARK_NET= (empty) to build without one.
-set(BULWARK_NET "${CMAKE_SOURCE_DIR}/nets/n1dual/net-9ed82c49.nnue" CACHE FILEPATH "net embedded as the default evaluation")
+# BULWARK_NET = "default" (the current best net below), a path to another .nnue, or empty to build without one.
+# The "default" indirection lets an existing build folder pick up a new default net without reconfiguring.
+set(BULWARK_DEFAULT_NET "${CMAKE_SOURCE_DIR}/nets/n4/net-a573c497.nnue")
+set(BULWARK_NET "default" CACHE STRING "net embedded as the default evaluation: default, a .nnue path, or empty")
+if(BULWARK_NET STREQUAL "${CMAKE_SOURCE_DIR}/nets/n1dual/net-9ed82c49.nnue")   # build folders from before "default"
+  set(BULWARK_NET "default" CACHE STRING "net embedded as the default evaluation: default, a .nnue path, or empty" FORCE)
+endif()
+if(BULWARK_NET STREQUAL "default")
+  set(BULWARK_NET "${BULWARK_DEFAULT_NET}")
+endif()
 if(BULWARK_NET)
   if(NOT EXISTS "${BULWARK_NET}")
     message(FATAL_ERROR "BULWARK_NET not found: ${BULWARK_NET}")

@@ -21,3 +21,4 @@ kaggle_outputs/
 .home/
 .tmp/
 tools/fastchess/
+kaggle_token.txt

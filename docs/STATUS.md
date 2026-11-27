@@ -4,6 +4,15 @@ Bulwark is a bitboard C++ chess engine (UCI, Chess960, PVS search) being built i
 
 Source of truth for scope: `PLAN_REMAINING.md` (uncommitted) and `project_B_nnue_chess_engine.md`. Frozen formats: `docs/interfaces.md`, `docs/pipeline.md`.
 
+## Update 2026-11-27 (phase 3: N4 adopted)
+
+- **N4 trained** on Kaggle (T4, 7 h, 300k steps x 16384 = 4.9B samples) on the **1.5B-position Lc0-label dataset**
+  (`kaggle/bulwark_train_n4.ipynb`). Net `nets/n4/net-a573c497.nnue`: 8 king buckets x 768 -> 1024, 8 output
+  buckets, dual head, format v3. Quantised error 0.031 mean (n1dual 0.022). Speed 58% of n1dual.
+- **vs n1dual: +227 +/- 32 at 25k nodes, +154 +/- 26 at 8+0.08** (466 games, no time losses). N4 is now the
+  **embedded default net**. Estimated strength ~3400.
+- Next: n4w (L1 1536) on the server GPU, then phase 4 (SPSA, Lazy SMP).
+
 ## Update 2026-11-26 (roadmap to maximum Elo: phases 0-2 done, phase 3 in progress)
 
 - **Nets trained** (46.3M positions, Lc0 + SF19 labels; server GPU, 1 h 23 min): N1 +447 / N1-WDL +296 vs the
