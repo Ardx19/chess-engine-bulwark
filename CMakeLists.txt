@@ -44,7 +44,9 @@ target_link_libraries(bulwark core)
 # The "default" indirection lets an existing build folder pick up a new default net without reconfiguring.
 set(BULWARK_DEFAULT_NET "${CMAKE_SOURCE_DIR}/nets/n4/net-a573c497.nnue")
 set(BULWARK_NET "default" CACHE STRING "net embedded as the default evaluation: default, a .nnue path, or empty")
-if(BULWARK_NET STREQUAL "${CMAKE_SOURCE_DIR}/nets/n1dual/net-9ed82c49.nnue")   # build folders from before "default"
+# Build folders from before "default" cached the then-default path as a FILEPATH (n1, n1dual, ...): reset them.
+get_property(_net_type CACHE BULWARK_NET PROPERTY TYPE)
+if(_net_type STREQUAL "FILEPATH" AND BULWARK_NET MATCHES "^${CMAKE_SOURCE_DIR}/nets/")
   set(BULWARK_NET "default" CACHE STRING "net embedded as the default evaluation: default, a .nnue path, or empty" FORCE)
 endif()
 if(BULWARK_NET STREQUAL "default")
