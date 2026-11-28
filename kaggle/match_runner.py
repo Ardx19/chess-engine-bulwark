@@ -1,4 +1,5 @@
-"""Bulwark match runner for one Kaggle CPU session (no GPU): engine A vs engine B, same binary, only EvalFile differs.
+"""Bulwark match runner for one Kaggle CPU session (no GPU): engine A vs engine B, same binary, only EvalFile differs,
+or (NEW_TUNE set) a second build whose src/tune.h defaults are patched, e.g. "LmrBase=81 LmrDiv=244", vs the plain build.
 
 Plays chunks of game pairs with fastchess until HOURS is used up, each chunk with its own opening seed, and writes the
 summed pentanomial counts to /kaggle/working/results.json after every chunk, so a session that ends early keeps all
@@ -21,6 +22,7 @@ CONC = 3
 TC = "8+0.08"
 NEW = "net-fcab4618.nnue"
 BASE = "net-a573c497.nnue"
+NEW_TUNE = ""                  # "Name=value ..." patched into src/tune.h for the new engine (empty: same binary)
 ROUNDS_PER_CHUNK = 9           # 18 games per chunk
 FIRST_CHUNK_EST_S = 600        # time budget assumed for the first chunk
 # --------------------------------------------------------------------
@@ -48,21 +50,32 @@ print("CPUs:", os.cpu_count(), flush=True)
 sh(f"git clone -q '{find('bulwark.bundle')}' {T}/bulwark && cd {T}/bulwark && git log --oneline -1")
 sh(f"cd {T}/bulwark && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release > /dev/null && cmake --build build -j4 --target bulwark > /dev/null")
 ENGINE = f"{T}/bulwark/build/bulwark"
+NEW_ENGINE = ENGINE
+if NEW_TUNE:
+    sh(f"cp -r {T}/bulwark {T}/bulwark-new && rm -rf {T}/bulwark-new/build")
+    src = open(f"{T}/bulwark-new/src/tune.h").read()
+    for kv in NEW_TUNE.split():
+        k, v = kv.split("=")
+        src, n = re.subn(rf"X\({k}, -?\d+,", f"X({k}, {int(v)},", src)
+        assert n == 1, k
+    open(f"{T}/bulwark-new/src/tune.h", "w").write(src)
+    sh(f"cd {T}/bulwark-new && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release > /dev/null && cmake --build build -j4 --target bulwark > /dev/null")
+    NEW_ENGINE = f"{T}/bulwark-new/build/bulwark"
 FC = f"{T}/fastchess"
 sh(f"cp '{find('fastchess.bin')}' {FC} && chmod +x {FC}")
 if subprocess.run(f"{FC} -version", shell=True, capture_output=True).returncode != 0:   # rebuild if it will not run
     sh(f"git clone -q --depth 1 https://github.com/Disservin/fastchess {T}/fc && make -C {T}/fc -j4 > /dev/null && cp {T}/fc/fastchess {FC}")
 NEW_P, BASE_P, BOOK = find(NEW), find(BASE), find("8moves_v3.pgn")
 nps = {}
-for name, p in (("new", NEW_P), ("base", BASE_P)):
-    out = subprocess.run(f"printf 'setoption name EvalFile value {p}\\nbench 12\\nquit\\n' | {ENGINE}", shell=True,
+for name, p, e in (("new", NEW_P, NEW_ENGINE), ("base", BASE_P, ENGINE)):
+    out = subprocess.run(f"printf 'setoption name EvalFile value {p}\\nbench 12\\nquit\\n' | {e}", shell=True,
                          capture_output=True, text=True).stdout
     m = re.search(r"Nodes/second: (\d+)", out)
     nps[name] = int(m.group(1)) if m else None
 print("nps", nps, flush=True)
 
 penta = [0, 0, 0, 0, 0]
-res = {"session": SESSION, "tc": TC, "conc": CONC, "new": NEW, "base": BASE, "nps": nps, "chunks": 0,
+res = {"session": SESSION, "tc": TC, "conc": CONC, "new": NEW, "base": BASE, "new_tune": NEW_TUNE, "nps": nps, "chunks": 0,
        "penta": penta, "time_losses": 0, "cpus": os.cpu_count()}
 chunk_s = []
 while True:
@@ -76,7 +89,7 @@ while True:
         os.remove(pgn)
     t0 = time.time()
     out = subprocess.run(
-        [FC, "-engine", f"cmd={ENGINE}", "name=new", f"option.EvalFile={NEW_P}",
+        [FC, "-engine", f"cmd={NEW_ENGINE}", "name=new", f"option.EvalFile={NEW_P}",
          "-engine", f"cmd={ENGINE}", "name=base", f"option.EvalFile={BASE_P}",
          "-each", f"tc={TC}", "option.Hash=16", "option.Threads=1",
          "-openings", f"file={BOOK}", "format=pgn", "order=random", "-srand", str(seed),

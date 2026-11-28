@@ -6,28 +6,28 @@
 // X(name, default, min, max, c_end): c_end is the SPSA perturbation size at the end of a run (about (max - min) / 20,
 // at least 0.5 for small integers).
 #define BULWARK_TUNABLES(X)                                                                                       \
-    X(LmrBase, 78, 0, 200, 8)           /* LMR table: LmrBase / 100 + ln(depth) ln(moves) / (LmrDiv / 100) */     \
-    X(LmrDiv, 247, 150, 400, 12)                                                                                  \
-    X(LmrHistDiv, 8192, 2048, 16384, 600) /* LMR: reduction -= (history + continuation history) / LmrHistDiv */ \
-    X(RazorMargin, 250, 50, 600, 25)    /* razoring: eval + RazorMargin * depth < alpha */                        \
+    X(LmrBase, 80, 0, 200, 8)           /* LMR table: LmrBase / 100 + ln(depth) ln(moves) / (LmrDiv / 100) */     \
+    X(LmrDiv, 243, 150, 400, 12)                                                                                  \
+    X(LmrHistDiv, 8218, 2048, 16384, 600) /* LMR: reduction -= (history + continuation history) / LmrHistDiv */ \
+    X(RazorMargin, 254, 50, 600, 25)    /* razoring: eval + RazorMargin * depth < alpha */                        \
     X(RfpMargin, 80, 30, 200, 8)        /* reverse futility: eval - RfpMargin * (depth - improving) >= beta */    \
     X(RfpDepth, 8, 4, 12, 0.5)                                                                                    \
     X(NmpBase, 3, 2, 5, 0.5)            /* null move: R = NmpBase + depth / NmpDepthDiv + (eval - beta) / ... */  \
     X(NmpDepthDiv, 3, 2, 6, 0.5)                                                                                  \
-    X(NmpEvalDiv, 200, 100, 400, 15)                                                                              \
+    X(NmpEvalDiv, 201, 100, 400, 15)                                                                              \
     X(SingDepth, 7, 4, 10, 0.5)         /* singular extension: depth >= SingDepth */                              \
     X(SingMargin, 32, 8, 64, 3)         /* singular beta = tt score - SingMargin * depth / 16 */                  \
     X(LmpBase, 3, 1, 8, 0.5)            /* late move pruning: moves > (LmpBase + depth^2) * (1 + improving) */    \
     X(LmpDepth, 8, 4, 12, 0.5)                                                                                    \
-    X(FutBase, 90, 20, 200, 8)          /* futility: eval + FutBase + FutMul * depth <= alpha */                  \
-    X(FutMul, 90, 30, 200, 8)                                                                                     \
+    X(FutBase, 89, 20, 200, 8)          /* futility: eval + FutBase + FutMul * depth <= alpha */                  \
+    X(FutMul, 89, 30, 200, 8)                                                                                     \
     X(FutDepth, 7, 4, 10, 0.5)                                                                                    \
     X(SeeQuiet, 25, 5, 60, 3)           /* SEE pruning: quiets below -SeeQuiet * depth^2, captures -SeeCapt * d */ \
-    X(SeeCapt, 90, 30, 200, 8)                                                                                    \
+    X(SeeCapt, 91, 30, 200, 8)                                                                                    \
     X(SeeDepth, 6, 3, 10, 0.5)                                                                                    \
     X(HistMul, 170, 80, 300, 12)        /* history bonus: min(HistMul * depth - HistSub, HistMax) */              \
-    X(HistSub, 100, 0, 300, 15)                                                                                   \
-    X(HistMax, 1700, 800, 3000, 120)                                                                              \
+    X(HistSub, 99, 0, 300, 15)                                                                                   \
+    X(HistMax, 1692, 800, 3000, 120)                                                                              \
     X(AspDelta, 25, 10, 60, 3)          /* first aspiration window half-width */
 
 namespace Tune {

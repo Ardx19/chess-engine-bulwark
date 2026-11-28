@@ -3,7 +3,7 @@
 #   KIND=match (default): kaggle/match_runner.py, kernels ardx19/bulwark-match-s<i>, results -> results/kaggle_match/s<i>/
 #   KIND=spsa:            kaggle/spsa_runner.py,  kernels ardx19/bulwark-spsa-s<i>,  results -> results/kaggle_spsa/s<i>/
 #
-#   scripts/kaggle_match.sh push  [SESSIONS=5 HOURS=3 CONC=3 TC=8+0.08 NEW=net-x.nnue BASE=net-y.nnue]
+#   scripts/kaggle_match.sh push  [SESSIONS=5 HOURS=3 CONC=3 TC=8+0.08 NEW=net-x.nnue BASE=net-y.nnue NEW_TUNE="A=1 B=2"]
 #   KIND=spsa scripts/kaggle_match.sh push  [SESSIONS=5 HOURS=3 CONC=4 NET=net-x.nnue NODES=25000 TOTAL_PAIRS=1500]
 #   scripts/kaggle_match.sh status | fetch
 # RESUME=1 attaches each kernel's own previous output, so a SPSA chain continues where the last version stopped.
@@ -14,7 +14,7 @@ cd "$(dirname "$0")/.."
 export KAGGLE_API_TOKEN=$(cat .home/.kaggle/access_token) KAGGLE_USERNAME=ardx19 KAGGLE_KEY=unused HOME=$PWD/.home
 KAGGLE=${KAGGLE:-/home/aryandutt/miniconda3/bin/kaggle}
 SESSIONS=${SESSIONS:-5}; HOURS=${HOURS:-3}; CONC=${CONC:-3}; TC=${TC:-8+0.08}
-NEW=${NEW:-net-fcab4618.nnue}; BASE=${BASE:-net-a573c497.nnue}
+NEW=${NEW:-net-fcab4618.nnue}; BASE=${BASE:-net-a573c497.nnue}; NEW_TUNE=${NEW_TUNE:-}
 KIND=${KIND:-match}; NET=${NET:-net-a573c497.nnue}; NODES=${NODES:-25000}; TOTAL_PAIRS=${TOTAL_PAIRS:-1500}
 OUT=results/kaggle_$KIND
 
@@ -24,6 +24,7 @@ case ${1:-} in
       d=.tmp/kaggle_$KIND/s$i; rm -rf "$d"; mkdir -p "$d"
       sed -e "s/^SESSION = .*/SESSION = $i/" -e "s/^HOURS = .*/HOURS = $HOURS/" -e "s/^CONC = .*/CONC = $CONC/" \
           -e "s/^TC = .*/TC = \"$TC\"/" -e "s/^NEW = .*/NEW = \"$NEW\"/" -e "s/^BASE = .*/BASE = \"$BASE\"/" \
+          -e "s/^NEW_TUNE = .*/NEW_TUNE = \"$NEW_TUNE\"/" \
           -e "s/^NET = .*/NET = \"$NET\"/" -e "s/^NODES = .*/NODES = $NODES/" -e "s/^TOTAL_PAIRS = .*/TOTAL_PAIRS = $TOTAL_PAIRS/" \
           kaggle/${KIND}_runner.py > "$d/${KIND}_runner.py"
       ks="[]"; [ -n "${RESUME:-}" ] && ks="[\"ardx19/bulwark-$KIND-s$i\"]"

@@ -4,6 +4,17 @@ Bulwark is a bitboard C++ chess engine (UCI, Chess960, PVS search) being built i
 
 Source of truth for scope: `PLAN_REMAINING.md` (uncommitted) and `project_B_nnue_chess_engine.md`. Frozen formats: `docs/interfaces.md`, `docs/pipeline.md`.
 
+## Update 2026-11-28 (n4w rejected; phase 4: SPSA round 1 adopted)
+
+- **n4w** (L1 1536, server GPU): +22.7 +/- 10.1 at 25k nodes, but 20% slower, so **-33.7 +/- 4.8 at 8+0.08** over
+  8208 games. Rejected; N4 stays. A longer N4-width run or more data is the better next net.
+- **SPSA round 1** (`scripts/spsa.py`, `kaggle/spsa_runner.py`): 5 Kaggle CPU chains, 20880 games at 25k nodes, all
+  23 search constants in `src/tune.h`. Moves were small (LmrBase 78->80, LmrDiv 247->243, RazorMargin 250->254, the
+  rest 1-8 units). **Tuned vs previous: +5.5 Elo (95% +1.2 .. +9.7) at 8+0.08** over 8244 games (5 Kaggle sessions
+  + laptop, no time losses). Applied as the new defaults; bench 111405 -> 116611.
+- Kaggle CPU matches: `scripts/kaggle_match.sh` (`NEW_TUNE="Name=value ..."` plays a patched build vs the plain one),
+  merged with `scripts/merge_penta.py`.
+
 ## Update 2026-11-27 (phase 3: N4 adopted)
 
 - **N4 trained** on Kaggle (T4, 7 h, 300k steps x 16384 = 4.9B samples) on the **1.5B-position Lc0-label dataset**
